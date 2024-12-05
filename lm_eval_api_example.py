@@ -6,12 +6,21 @@ from lm_eval.utils import make_table
 from lm_eval.tasks import TaskManager
 
 from lm_eval.models.huggingface_custom import HFLM_custom as HFLM
+from transformer_lens import HookedTransformer 
 
-model = HFLM(pretrained='google/gemma-2-2b-it')
+input_model = HookedTransformer.from_pretrained(
+            'google/gemma-2-2b-it',
+            device='cuda:0',
+            dtype=torch.bfloat16,
+            fold_ln=False,
+            center_writing_weights=False,
+            center_unembed=False
+        )
+
+model = HFLM(pretrained='google/gemma-2-2b-it',hooked_model=input_model)
 
 task_manager = TaskManager('INFO',include_path=None)
 results = evaluator.simple_evaluate(
     model= model, tasks= ['wmdp'], num_fewshot= None, batch_size= 2)
 print(make_table(results))
 
-#max_batch_size= None, device =None, use_cache= None, limit= None ,check_integrity =False, write_out= False, log_samples= False,  system_instruction= None, apply_chat_template= False, fewshot_as_multiturn = False, gen_kwargs= None, task_manager=task_manager, verbosity= 'INFO', predict_only =False, random_seed= 0, numpy_random_seed =1234, torch_random_seed= 1234, fewshot_random_seed= 1234, cache_requests= False, rewrite_requests_cache=False, delete_requests_cache= False
