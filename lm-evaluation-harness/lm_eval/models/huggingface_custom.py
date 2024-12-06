@@ -39,7 +39,7 @@ from lm_eval.models.utils import (
 )
 ###added
 
-from transformer_lens import HookedTransformer 
+from sae_lens import HookedSAETransformer
 
 eval_logger = utils.eval_logger
 
@@ -59,7 +59,7 @@ class HFLM_custom(TemplateLM):
     def __init__(
         self,
         pretrained: str,
-        hooked_model: Optional[HookedTransformer] = None,
+        hooked_model: Optional[HookedSAETransformer] = None,
         backend: Literal["default", "causal", "seq2seq"] = "default",
         # override whether the model should be treated as decoder-only (causal) or encoder-decoder (seq2seq)
         revision: Optional[str] = "main",
@@ -570,17 +570,14 @@ class HFLM_custom(TemplateLM):
                             model_kwargs["bnb_4bit_compute_dtype"]
                         )
             
-            #import pdb; pdb.set_trace() 
 
-            self._model = HookedTransformer.from_pretrained(
+            self._model = HookedSAETransformer.from_pretrained(
             pretrained,
-            device='cuda:0',
-            dtype=torch.float16,
+            device=self.device,
             fold_ln=False,
             center_writing_weights=False,
             center_unembed=False
-        )
-            
+            )
             # self._model = self.AUTO_MODEL_CLASS.from_pretrained(
             #     pretrained,
             #     revision=revision,
@@ -588,7 +585,6 @@ class HFLM_custom(TemplateLM):
             #     trust_remote_code=trust_remote_code,
             #     **model_kwargs,
             # )
-            #import pdb; pdb.set_trace() 
         else:
             if autogptq and gptqmodel:
                 raise ValueError(
