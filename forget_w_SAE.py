@@ -7,12 +7,12 @@ from tqdm import tqdm
 
 import os
 from pathlib import Path
-from utils import collate_fn,plot_importances
+from utils import collate_fn,plot_importances,plot_results
 import pickle
 
 
 class forget_w_SAE_CausalLM():
-    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[100,50,25,10,5]):
+    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[100,50,25,10,5],th_ratio = 10**-3):
         
         self.model_name = model_name
         self.sae_name = sae_name
@@ -43,7 +43,8 @@ class forget_w_SAE_CausalLM():
         self.fgt_dset = fgt_dset
         #params unlearning 
         self.num_activations = num_activations     
-    
+        self.th_ratio = th_ratio
+
     def hook_fn_activations(self, module, input, output):
         self.activations = output[0]
 
@@ -119,9 +120,11 @@ class forget_w_SAE_CausalLM():
 
         # index = torch.unique(torch.cat((index[-500:],index_top[-250:]),dim=0))
         # return index
-        id_ratio = (norm_vec_fgt_ratio<10**3)
+        id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
         norm_vec_fgt[id_ratio] = 0
         _,index_top = torch.sort(norm_vec_fgt)
+        #import pdb; pdb.set_trace()
+
         index_clean = index[~torch.isin(index,index_top[-num_act_rem_top:])]
 
         return index_top[-num_act_rem_top:]#torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0)
@@ -182,7 +185,7 @@ class forget_w_SAE_CausalLM():
             st = 1
 
         buff = activation[:,st:,self.index_to_rem]
-        buff[buff>0]= -50#preliminar
+        buff[buff>0]= self.clamp_val
         activation[:,st:,self.index_to_rem] = buff
         sae_out = self.sae.decode(activation)
         with torch.no_grad():
@@ -193,7 +196,8 @@ class forget_w_SAE_CausalLM():
         
         return (sae_out,outputs[1])
 
-    def get_model_with_sae(self,config_num):
+    def get_model_with_sae(self,config_num,clamp_val):
+        self.clamp_val = clamp_val
         self.select_activations_FIM()
         self.index_to_rem = self.dict_indexes[f'N_{self.num_activations[config_num]}']
 
@@ -208,6 +212,7 @@ if __name__ == "__main__":
     from lm_eval.tasks import TaskManager
 
     from lm_eval.models.huggingface import HFLM
+    import pandas as pd
 
     wikitext = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
     wikitext.shuffle(seed=42)
@@ -229,15 +234,32 @@ if __name__ == "__main__":
                                         use_error_term=True,
                                         device="cuda:0")
 
+    all_results = []
+    for config_num_act in range(len(constructor.num_activations)):
+        for clamp_val in [-10,-50,-100,-200]:#,
+            print(f'CONFIG ----> # of feat rem. {constructor.num_activations[config_num_act]}, clamp val {clamp_val}')
+            hook_added = constructor.get_model_with_sae(config_num_act,clamp_val)
+            lm_model = HFLM(pretrained=constructor.model,tokenizer=constructor.tokenizer)
+            task_manager = TaskManager('INFO',include_path=None)
+            results = evaluator.simple_evaluate(model= lm_model, tasks= ['wmdp_bio'], num_fewshot= None, batch_size= 2)
+            
+            print(make_table(results))
+            acc_wmdp = results['results']['wmdp_bio']['acc,none']
+            std_wmdp = results['results']['wmdp_bio']['acc_stderr,none']
 
-    for config_num in range(len(constructor.num_activations)):
-        print('CONFIG: ',constructor.num_activations[config_num])
-        hook_added = constructor.get_model_with_sae(config_num)
-        lm_model = HFLM(pretrained=constructor.model,tokenizer=constructor.tokenizer)
-        task_manager = TaskManager('INFO',include_path=None)
-        results = evaluator.simple_evaluate(model= lm_model, tasks= ['wmdp_bio'], num_fewshot= None, batch_size= 2)
-        print(make_table(results))
-        results = evaluator.simple_evaluate(model= lm_model, tasks= ['mmlu_jb'], num_fewshot= None, batch_size= 2)
-        print(make_table(results))
-        #remove hook 
-        hook_added.remove()
+            results = evaluator.simple_evaluate(model= lm_model, tasks= ['mmlu_jb'], num_fewshot= None, batch_size= 2)
+            print(make_table(results))
+            #remove hook 
+            hook_added.remove()
+            
+            acc_mmlu = results['results']['mmlu_jb']['acc,none']
+            std_mmlu = results['results']['mmlu_jb']['acc_stderr,none']
+
+            all_results.append([constructor.th_ratio,clamp_val,constructor.num_activations[config_num_act],acc_wmdp,std_wmdp,acc_mmlu,std_mmlu])
+    
+    df = pd.DataFrame(all_results,columns=['th_ratio','clamp_val','num_activations','acc_wmdp','std_wmdp','acc_mmlu','std_mmlu'])
+    #save df to csv
+    Path('results_forget_w_SAE').mkdir(parents=True, exist_ok=True)
+    file_to_save = os.path.join('results_forget_w_SAE',f'results_forget_w_SAE_th_ratio_{constructor.th_ratio}.csv')
+    df.to_csv(file_to_save,index=False)
+    plot_results()
