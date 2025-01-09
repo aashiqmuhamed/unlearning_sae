@@ -12,7 +12,7 @@ import pickle
 
 
 class forget_w_SAE_CausalLM():
-    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[750]):
+    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[100,50,25,10,5]):
         
         self.model_name = model_name
         self.sae_name = sae_name
@@ -52,7 +52,7 @@ class forget_w_SAE_CausalLM():
         torch.cuda.empty_cache()
         #JB check between normal forward which contains error term 
         ####
-        feat = self.sae.encode(target_act)
+        feat = self.sae.encode_standard(target_act)
         recon = self.sae.decode(feat)
         ####
         loss = self.criterion_FIM(recon[:,4:,:], target_act[:,4:,:])
@@ -112,12 +112,19 @@ class forget_w_SAE_CausalLM():
         norm_vec_fgt_ratio[norm_vec==0] = 0
         _,index = torch.sort(norm_vec_fgt_ratio)
 
+
+        # id_ratio = (norm_vec_fgt_ratio<10**3)
+        # norm_vec_fgt[id_ratio] = 0
+        # _,index_top = torch.sort(norm_vec_fgt)
+
+        # index = torch.unique(torch.cat((index[-500:],index_top[-250:]),dim=0))
+        # return index
         id_ratio = (norm_vec_fgt_ratio<10**3)
         norm_vec_fgt[id_ratio] = 0
         _,index_top = torch.sort(norm_vec_fgt)
         index_clean = index[~torch.isin(index,index_top[-num_act_rem_top:])]
 
-        return torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0)
+        return index_top[-num_act_rem_top:]#torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0)
 
 
         
@@ -165,23 +172,37 @@ class forget_w_SAE_CausalLM():
         for num_act_rem in self.num_activations:
             self.dict_indexes[f'N_{num_act_rem}'] = self.get_activations_indexes(num_act_rem)
 
+    #add error term
     def add_sae_hook(self,mod,inputs,outputs): 
         activation = self.sae.encode(outputs[0])
-        buff = activation[:,:,self.index_to_rem]
-        buff[buff>0]= -100#preliminar
-        activation[:,:,self.index_to_rem] = buff
-        return (self.sae.decode(activation),outputs[1])
 
-    def get_model_with_sae(self):
+        if activation.shape[1] ==1:
+            st = 0
+        else:
+            st = 1
+
+        buff = activation[:,st:,self.index_to_rem]
+        buff[buff>0]= -50#preliminar
+        activation[:,st:,self.index_to_rem] = buff
+        sae_out = self.sae.decode(activation)
+        with torch.no_grad():
+            feature_acts_clean = self.sae.encode(outputs[0])
+            reconstruct_clean = self.sae.decode(feature_acts_clean)
+            sae_error =(outputs[0] - reconstruct_clean)
+        sae_out = sae_out + sae_error
+        
+        return (sae_out,outputs[1])
+
+    def get_model_with_sae(self,config_num):
         self.select_activations_FIM()
-        self.index_to_rem = self.dict_indexes[f'N_{self.num_activations[0]}']
+        self.index_to_rem = self.dict_indexes[f'N_{self.num_activations[config_num]}']
 
         hook = self.model.model.layers[self.hook_layer].register_forward_hook(self.add_sae_hook)
 
-    #def unlearn_by_FIM(self,)
+        return hook 
 
 if __name__ == "__main__":
-    from datasets import load_dataset
+    from datasets import load_dataset,concatenate_datasets
     from lm_eval import evaluator
     from lm_eval.utils import make_table
     from lm_eval.tasks import TaskManager
@@ -193,20 +214,30 @@ if __name__ == "__main__":
 
     corpora_fgt = load_dataset('json',data_files="/home/jb/Documents/unlearning_sae/data_wmdp_forget_corpora/bio_remove_dataset.jsonl")['train']
     corpora_fgt.shuffle(seed=42)
+
+    wmdp_bio = load_dataset("cais/wmdp", name="wmdp-bio", split="test")
+    wikitext = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    
+    mmlu_history = load_dataset("cais/mmlu", "high_school_us_history", split="test")
+    mmlu_history = concatenate_datasets([load_dataset("cais/mmlu", "philosophy", split="test"), load_dataset("cais/mmlu", "high_school_european_history", split="test"), mmlu_history])
+
     constructor = forget_w_SAE_CausalLM(model_name = "google/gemma-2-2b-it",
                                         sae_name = "gemma-scope-2b-pt-res-canonical",
-                                        sae_id="layer_7/width_65k/canonical",
-                                        retain_dset=wikitext.take(1000),
-                                        fgt_dset=corpora_fgt.take(1000),
+                                        sae_id="layer_3/width_16k/canonical",
+                                        retain_dset=wikitext.take(4000),
+                                        fgt_dset=corpora_fgt.take(4000),
                                         use_error_term=True,
                                         device="cuda:0")
 
 
-    
-    constructor.get_model_with_sae()
-    lm_model = HFLM(pretrained=constructor.model,tokenizer=constructor.tokenizer)
-    task_manager = TaskManager('INFO',include_path=None)
-    results = evaluator.simple_evaluate(model= lm_model, tasks= ['wmdp_bio'], num_fewshot= None, batch_size= 2)
-    print(make_table(results))
-    results = evaluator.simple_evaluate(model= lm_model, tasks= ['mmlu_jb'], num_fewshot= None, batch_size= 2)
-    print(make_table(results))
+    for config_num in range(len(constructor.num_activations)):
+        print('CONFIG: ',constructor.num_activations[config_num])
+        hook_added = constructor.get_model_with_sae(config_num)
+        lm_model = HFLM(pretrained=constructor.model,tokenizer=constructor.tokenizer)
+        task_manager = TaskManager('INFO',include_path=None)
+        results = evaluator.simple_evaluate(model= lm_model, tasks= ['wmdp_bio'], num_fewshot= None, batch_size= 2)
+        print(make_table(results))
+        results = evaluator.simple_evaluate(model= lm_model, tasks= ['mmlu_jb'], num_fewshot= None, batch_size= 2)
+        print(make_table(results))
+        #remove hook 
+        hook_added.remove()
