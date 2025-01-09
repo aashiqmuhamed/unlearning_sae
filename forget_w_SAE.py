@@ -103,7 +103,7 @@ class forget_w_SAE_CausalLM():
         return self.get_norm_importances()
     
     def get_activations_indexes(self,num_act_rem):
-        num_act_rem_top = int(num_act_rem/3)
+        num_act_rem_top = num_act_rem#int(num_act_rem/3)
         num_act_rem_th = int(2*num_act_rem/3)
         key = 'W_dec'
         norm_vec_fgt = torch.norm(self.importances_fgt[key].data,dim=1)

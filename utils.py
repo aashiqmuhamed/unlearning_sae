@@ -2,8 +2,9 @@ import numpy as np
 import json
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import pandas as pd
+import glob
 
-            
 mpl.rcParams['axes.spines.top'] = False
 mpl.rcParams['axes.spines.right'] = False
 
@@ -112,4 +113,37 @@ def plot_importances(importance_dict,importance_dict_fgt):
 
 
 
+def plot_results():
+    #collect df
+    files = glob.glob('results_forget_w_SAE/*.csv')
+    print(files)
+    df = None
+    for file in files:
+        if df is None:
+            df = pd.read_csv(file)
+        else:
+            df = pd.concat([df, pd.read_csv(file)], ignore_index=True)
+    print(df.head())
+    # filter for th and #of feat
+    th_list = df.th_ratio.unique()
+    num_feat_list = df.num_activations.unique()
+    fig,ax = plt.subplots(figsize=(10, 6),ncols=1,nrows=1)
+    for th in th_list:
+        for num_feat in num_feat_list:
+            df_th = df[df.th_ratio == th]
+            df_th = df_th[df_th.num_activations == num_feat]
 
+            #plot
+            
+            ax.plot(df_th['acc_wmdp'],df_th['acc_mmlu'],label=f'th={th},#_feat={num_feat}',marker='o')
+            # Add values at the top of each plot point
+            print(df_th)
+            # for i, value in enumerate(df_th['clamp_val'].values):
+            #    plt.text(df_th['acc_wmdp'].values[i],df_th['acc_mmlu'].values[i]-df_th['acc_mmlu'].values[i]*0.02, str(value), ha='center', va='bottom')
+    #add legend
+    ax.legend()
+    #save
+    plt.savefig(f'acc_wmdp_vs_acc_mmlu.png')
+
+if __name__ == '__main__':
+    plot_results()  
