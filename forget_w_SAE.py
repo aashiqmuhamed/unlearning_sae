@@ -12,7 +12,7 @@ import pickle
 
 
 class forget_w_SAE_CausalLM():
-    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[100,50,25,10,5],th_ratio = 10**-3):
+    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[100,50,25,10,5],th_ratio = 10**3,batch_size=1):
         
         self.model_name = model_name
         self.sae_name = sae_name
@@ -44,6 +44,7 @@ class forget_w_SAE_CausalLM():
         #params unlearning 
         self.num_activations = num_activations     
         self.th_ratio = th_ratio
+        self.batch_size = batch_size
 
     def hook_fn_activations(self, module, input, output):
         self.activations = output[0]
@@ -86,7 +87,7 @@ class forget_w_SAE_CausalLM():
         
         for batch in tqdm(dataloader):
             #max_lenght set as rmu
-            batch_tokens = self.tokenizer(batch, return_tensors="pt",truncation=True, max_length=768).input_ids.to(self.device)
+            batch_tokens = self.tokenizer(batch, return_tensors="pt",truncation=True, max_length=1024).input_ids.to(self.device)
             with torch.no_grad():
                 _ = self.model(batch_tokens)#, prepend_bos=True)
                 #import pdb; pdb.set_trace()
@@ -103,7 +104,7 @@ class forget_w_SAE_CausalLM():
         return self.get_norm_importances()
     
     def get_activations_indexes(self,num_act_rem):
-        num_act_rem_top = num_act_rem#int(num_act_rem/3)
+        num_act_rem_top = int(num_act_rem/3)
         num_act_rem_th = int(2*num_act_rem/3)
         key = 'W_dec'
         norm_vec_fgt = torch.norm(self.importances_fgt[key].data,dim=1)
@@ -114,27 +115,26 @@ class forget_w_SAE_CausalLM():
         _,index = torch.sort(norm_vec_fgt_ratio)
 
 
-        # id_ratio = (norm_vec_fgt_ratio<10**3)
-        # norm_vec_fgt[id_ratio] = 0
-        # _,index_top = torch.sort(norm_vec_fgt)
-
-        # index = torch.unique(torch.cat((index[-500:],index_top[-250:]),dim=0))
-        # return index
         id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
         norm_vec_fgt[id_ratio] = 0
         _,index_top = torch.sort(norm_vec_fgt)
-        #import pdb; pdb.set_trace()
 
-        index_clean = index[~torch.isin(index,index_top[-num_act_rem_top:])]
+        index = torch.unique(torch.cat((index[-500:],index_top[-250:]),dim=0))
+        return index
+        # id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
+        # norm_vec_fgt[id_ratio] = 0
+        # _,index_top = torch.sort(norm_vec_fgt)
 
-        return index_top[-num_act_rem_top:]#torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0)
+        # index_clean = index[~torch.isin(index,index_top[-num_act_rem_top:])]
+
+        # return torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0)
 
 
         
-    def select_activations_FIM(self, optimizer = None,batch_size=1, criterion = torch.nn.MSELoss()):
-        batch_size=batch_size
-        dataloader_fgt = DataLoader(self.fgt_dset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-        dataloader_retain = DataLoader(self.retain_dset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    def select_activations_FIM(self, optimizer = None, criterion = torch.nn.MSELoss()):
+        
+        dataloader_fgt = DataLoader(self.fgt_dset, batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn)
+        dataloader_retain = DataLoader(self.retain_dset, batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn)
         if optimizer is None:
             self.optimizer_FIM = torch.optim.SGD(self.sae.parameters(), lr=0.1)
         self.criterion_FIM = criterion
@@ -215,27 +215,33 @@ if __name__ == "__main__":
     import pandas as pd
 
     wikitext = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
-    wikitext.shuffle(seed=42)
+    
 
     corpora_fgt = load_dataset('json',data_files="/home/jb/Documents/unlearning_sae/data_wmdp_forget_corpora/bio_remove_dataset.jsonl")['train']
     corpora_fgt.shuffle(seed=42)
 
     wmdp_bio = load_dataset("cais/wmdp", name="wmdp-bio", split="test")
+
     wikitext = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-    
+    #filter wikitext for sentences <50
+    wikitext = wikitext.filter(lambda x: len(x["text"])>50)
+    wikitext.shuffle(seed=42)
+ 
+
     mmlu_history = load_dataset("cais/mmlu", "high_school_us_history", split="test")
     mmlu_history = concatenate_datasets([load_dataset("cais/mmlu", "philosophy", split="test"), load_dataset("cais/mmlu", "high_school_european_history", split="test"), mmlu_history])
 
     constructor = forget_w_SAE_CausalLM(model_name = "google/gemma-2-2b-it",
                                         sae_name = "gemma-scope-2b-pt-res-canonical",
-                                        sae_id="layer_3/width_16k/canonical",
-                                        retain_dset=wikitext.take(4000),
-                                        fgt_dset=corpora_fgt.take(4000),
+                                        sae_id="layer_7/width_65k/canonical",
+                                        retain_dset=wikitext,
+                                        fgt_dset=corpora_fgt.take(2000),
                                         use_error_term=True,
-                                        device="cuda:0")
+                                        device="cuda:0",
+                                        th_ratio=10**2)
 
     all_results = []
-    for config_num_act in range(len(constructor.num_activations)):
+    for config_num_act in [1]:#range(len(constructor.num_activations)):
         for clamp_val in [-10,-50,-100,-200]:#,
             print(f'CONFIG ----> # of feat rem. {constructor.num_activations[config_num_act]}, clamp val {clamp_val}')
             hook_added = constructor.get_model_with_sae(config_num_act,clamp_val)
