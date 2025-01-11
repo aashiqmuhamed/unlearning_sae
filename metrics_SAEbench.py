@@ -30,7 +30,7 @@ from SAEBench.evals.unlearning.utils.var import (
 
 from transformer_lens import HookedTransformer
 from sae_lens import SAE
-from evals.unlearning.utils.intervention import anthropic_clamp_resid_SAE_features
+from SAEBench.evals.unlearning.utils.intervention import anthropic_clamp_resid_SAE_features
 
 all_permutations = list(permutations([0, 1, 2, 3]))
 
@@ -59,6 +59,7 @@ def load_dataset_with_retries(
 
 def calculate_MCQ_metrics(
     model: transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizer,
     mcq_batch_size: int,
     artifacts_folder: str,
     dataset_name: str = "wmdp-bio",
@@ -120,7 +121,7 @@ def calculate_MCQ_metrics(
     ], "target_metric not recognised"
     assert split in ["all", "train", "test"], "split not recognised"
     if target_metric is not None:
-        model_name = model.cfg.model_name
+        #model_name = model.cfg.model_name
         full_dataset_name = (
             f'mmlu-{dataset_name.replace("_", "-")}' if dataset_name != "wmdp-bio" else dataset_name
         )
@@ -137,7 +138,7 @@ def calculate_MCQ_metrics(
         choices_list = [choices_list[i] for i in question_subset if i < len(choices_list)]
 
     # changing prompt_format
-    if model.cfg.model_name in ["gemma-2-9b-it", "gemma-2-2b-it"]:
+    if "gemma-2-9b-it" in model.config._name_or_path or "gemma-2-2b-it" in model.config._name_or_path:
         prompt_format = "GEMMA_INST_FORMAT"
     else:
         raise Exception("Model prompt format not found.")
@@ -181,19 +182,19 @@ def calculate_MCQ_metrics(
     if len(prompts) > batch_size * n_batches:
         n_batches = n_batches + 1
 
-    if isinstance(model, HookedTransformer):
-        output_probs = get_output_probs_abcd(
-            model, prompts, batch_size=batch_size, n_batches=n_batches, verbose=verbose
-        )
-    else:
-        output_probs = get_output_probs_abcd_hf(
-            model,
-            model.tokenizer,
-            prompts,
-            batch_size=batch_size,
-            n_batches=n_batches,
-            verbose=verbose,
-        )
+    #if isinstance(model, HookedTransformer):
+    output_probs = get_output_probs_abcd(
+        model,tokenizer, prompts, batch_size=batch_size, n_batches=n_batches, verbose=verbose
+    )
+    #else:
+        # output_probs = get_output_probs_abcd_hf(
+        #     model,
+        #     tokenizer,
+        #     prompts,
+        #     batch_size=batch_size,
+        #     n_batches=n_batches,
+        #     verbose=verbose,
+        # )
 
     predicted_answers = output_probs.argmax(dim=1)
     predicted_probs = output_probs.max(dim=1)[0]
@@ -230,12 +231,11 @@ def calculate_MCQ_metrics(
     return metrics
 
 
-def get_output_probs_abcd(model, prompts, batch_size=2, n_batches=100, verbose=True):
+def get_output_probs_abcd(model,tokenizer, prompts, batch_size=2, n_batches=100, verbose=True):
     """
     Calculates probability of selecting A, B, C, & D for a given input prompt
     and language model. Returns tensor of shape (len(prompts), 4).
     """
-
     spaces_and_single_models = [
         "gemma-2b-it",
         "gemma-2b",
@@ -244,15 +244,15 @@ def get_output_probs_abcd(model, prompts, batch_size=2, n_batches=100, verbose=T
         "gemma-2-2b-it",
         "gemma-2-2b",
     ]
-    if model.cfg.model_name in spaces_and_single_models:
+    if model.config._name_or_path.split('/')[1] in spaces_and_single_models:
         answer_strings = ["A", "B", "C", "D", " A", " B", " C", " D"]
-    elif model.cfg.model_name in ["Mistral-7B-v0.1"]:
+    elif model.config._name_or_path.split('/')[1] in ["Mistral-7B-v0.1"]:
         answer_strings = ["A", "B", "C", "D"]
     else:
         raise Exception("Model name not hardcoded in this function.")
 
-    answer_tokens = model.to_tokens(answer_strings, prepend_bos=False).flatten()
-
+    answer_tokens = tokenizer(answer_strings,return_tensors='pt',add_special_tokens=False)["input_ids"].flatten()
+    
     # batch_size = 1
 
     with torch.no_grad():
@@ -263,21 +263,22 @@ def get_output_probs_abcd(model, prompts, batch_size=2, n_batches=100, verbose=T
             current_batch_size = len(prompt_batch)
 
             # prepend_bos is False because the prompt already has a BOS token due to the instruct format
-            token_batch = model.to_tokens(prompt_batch, padding_side="right", prepend_bos=False).to(
+            token_batch = tokenizer(prompt_batch, padding=True,padding_side="right",return_tensors='pt',add_special_tokens=False)["input_ids"].to(
                 "cuda"
-            )
+            )#,max_length=1024 can be added with padding = 'max_length'
 
-            assert (token_batch == model.tokenizer.bos_token_id).sum().item() == len(token_batch)
+            assert (token_batch == tokenizer.bos_token_id).sum().item() == len(token_batch)
 
-            token_lens = [len(model.to_tokens(x, prepend_bos=False)[0]) for x in prompt_batch]
+            token_lens = [len(tokenizer(x,return_tensors='pt',add_special_tokens=False)['input_ids'][0]) for x in prompt_batch]
             next_token_indices = torch.tensor([x - 1 for x in token_lens]).to("cuda")
 
-            vals = model(token_batch, return_type="logits")
+            vals = model(token_batch).logits
+            #import pdb; pdb.set_trace()
             vals = vals[torch.arange(current_batch_size).to("cuda"), next_token_indices].softmax(-1)
             # vals = torch.vstack([x[i] for x, i in zip(vals, next_token_indices)]).softmax(-1)
             # vals = vals[0, -1].softmax(-1)
             vals = vals[:, answer_tokens]
-            if model.cfg.model_name in spaces_and_single_models:
+            if model.config._name_or_path.split('/')[1] in spaces_and_single_models:
                 vals = vals.reshape(-1, 2, 4).max(dim=1)[0]
             output_probs.append(vals)
 
@@ -485,47 +486,51 @@ def compute_loss_added(
         return np.mean(loss_diffs)
 
 
-def get_baseline_metrics(
+def get_metrics(
     model: transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizer,
     mcq_batch_size: int,
     artifacts_folder: str,
+    res_folder_name:str,
     dataset_name,
     metric_param,
     recompute=False,
     split="all",
+    
 ):
     """
-    Compute the baseline metrics or retrieve if pre-computed and saved
+    Compute metrics or retrieve if pre-computed and saved
+    TO DO: add loss computation
     """
 
-    model.reset_hooks()
 
     full_dataset_name = (
         f'mmlu-{dataset_name.replace("_", "-")}' if dataset_name != "wmdp-bio" else dataset_name
     )
-    model_name = model.cfg.model_name
+
     q_type = metric_param["target_metric"]
 
-    baseline_metrics_file = os.path.join(
-        artifacts_folder, "data/baseline_metrics", f"{split}/{full_dataset_name}_{q_type}.json"
+    metrics_file = os.path.join(
+        artifacts_folder, "data",res_folder_name, f"{split}/{full_dataset_name}_{q_type}.json"
     )
-    os.makedirs(os.path.dirname(baseline_metrics_file), exist_ok=True)
+    os.makedirs(os.path.dirname(metrics_file), exist_ok=True)
 
-    if not recompute and os.path.exists(baseline_metrics_file):
+    if not recompute and os.path.exists(metrics_file):
         # Load the json
-        with open(baseline_metrics_file, "r") as f:
-            baseline_metrics = json.load(f)
+        with open(metrics_file, "r") as f:
+            metrics = json.load(f)
 
         # Convert lists to arrays for ease of use
-        for key, value in baseline_metrics.items():
+        for key, value in metrics.items():
             if isinstance(value, list):
-                baseline_metrics[key] = np.array(value)
+                metrics[key] = np.array(value)
 
-        return baseline_metrics
+        return metrics
 
     else:
-        baseline_metrics = calculate_MCQ_metrics(
+        metrics = calculate_MCQ_metrics(
             model,
+            tokenizer,
             mcq_batch_size,
             artifacts_folder,
             dataset_name=dataset_name,
@@ -533,17 +538,17 @@ def get_baseline_metrics(
             **metric_param,
         )
 
-        metrics = baseline_metrics.copy()
+        metrics = metrics.copy()
 
         # Convert lists to arrays for ease of use
         for key, value in metrics.items():
             if isinstance(value, np.ndarray):
                 metrics[key] = value.tolist()
 
-        with open(baseline_metrics_file, "w") as f:
+        with open(metrics_file, "w") as f:
             json.dump(metrics, f)
 
-        return baseline_metrics
+        return metrics
 
 
 def modify_and_calculate_metrics(
@@ -756,6 +761,7 @@ def create_df_from_metrics(metrics_list):
 
 def save_target_question_ids(
     model: transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizer,
     mcq_batch_size: int,
     artifacts_folder: str,
     dataset_name: str,
@@ -771,7 +777,8 @@ def save_target_question_ids(
     full_dataset_name = (
         f'mmlu-{dataset_name.replace("_", "-")}' if dataset_name != "wmdp-bio" else dataset_name
     )
-    model_name = model.cfg.model_name
+    
+    model_name = model.config._name_or_path.replace("/", "_")
 
     # Check if the files already exist
     file_paths = [
@@ -791,10 +798,11 @@ def save_target_question_ids(
     print(f"Saving target question ids for {model_name} on {dataset_name}...")
 
     metrics = calculate_MCQ_metrics(
-        model, mcq_batch_size, artifacts_folder, dataset_name, permutations=all_permutations
+        model,tokenizer, mcq_batch_size, artifacts_folder, dataset_name, permutations=all_permutations
     )
     metrics_wo_question = calculate_MCQ_metrics(
         model,
+        tokenizer,
         mcq_batch_size,
         artifacts_folder,
         dataset_name,

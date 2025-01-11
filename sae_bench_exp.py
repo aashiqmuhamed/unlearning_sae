@@ -1,13 +1,19 @@
 from opts import get_args
 from forget_w_SAE import forget_w_SAE_CausalLM
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig, AutoTokenizer
+import torch
+import numpy as np
+import pandas as pd
 
 from datasets import load_dataset,concatenate_datasets    
-from metrics_SAEbench import get_baseline_metrics,save_target_question_ids
+from metrics_SAEbench import get_metrics,save_target_question_ids
+from utils import plot_results
 import os
+from pathlib import Path
+
 args = get_args()
 
 #DATASETS
-
 if args.fgt_dset == 'wmdp_forget_corpora':    
     fgt_set = load_dataset('json',data_files=args.root_folder+"data_wmdp_forget_corpora/bio_remove_dataset.jsonl")['train']
     fgt_set.shuffle(seed=42)
@@ -22,9 +28,46 @@ if args.retain_dset == 'wikitext':
 else:
     raise NotImplementedError
 
-#CALL Unlearning Method class
+dataset_names = ["wmdp-bio",
+                 "high_school_us_history",
+                 "college_computer_science",
+                 "high_school_geography",
+                 "human_aging"]
 
-unlearn_method = forget_w_SAE_CausalLM(model_name = args.model_name,
+#metric_params = ['correct', 'correct-iff-question',  'correct-no-tricks']
+target_metric = 'correct'
+split = 'all'
+mcq_batch_size=8
+artifacts_folder = os.path.join(args.root_folder, "artifacts", 'unlearning', args.model_name)
+
+input_model = None
+input_tokenizer = None
+#BASELINE from sae Bench
+if args.run_baseline:
+    baseline_metrics = {}
+    input_model = AutoModelForCausalLM.from_pretrained(args.model_name,
+                                                device_map=args.device,
+                                                torch_dtype=torch.bfloat16)
+
+    input_tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+
+    for dataset_name in [x for x in dataset_names]:
+        # Ensure that target question ids exist
+        save_target_question_ids(input_model,input_tokenizer, mcq_batch_size, artifacts_folder, dataset_name)
+
+        metric_param = {"target_metric": target_metric, "verbose": False}
+
+        baseline_metric = get_metrics(input_model,input_tokenizer, mcq_batch_size, artifacts_folder, 
+                                      res_folder_name="baseline",
+                                      dataset_name = dataset_name,
+                                      metric_param=metric_param,
+                                      split=split)
+
+        baseline_metrics[dataset_name] = baseline_metric
+    
+#CALL Unlearning Method class    
+if args.run_unlearn:
+    unlearn_method = forget_w_SAE_CausalLM(model_name = args.model_name,
                                     sae_name = args.sae_name,
                                     sae_id=args.sae_id,
                                     retain_dset=retain_set,
@@ -33,42 +76,48 @@ unlearn_method = forget_w_SAE_CausalLM(model_name = args.model_name,
                                     device=args.device,
                                     th_ratio=args.th_ratio,
                                     batch_size=args.batch_size,
-                                    num_activations=args.num_activations)
+                                    num_activations=args.num_activations,
+                                    input_model=input_model,
+                                    input_tokenizer=input_tokenizer)
+    #LOOP over params
+    all_results = []
 
-dataset_names = ["wmdp-bio",
-                 "high_school_us_history",
-                 "college_computer_science",
-                 "high_school_geography",
-                 "human_aging"]
+    for config_num_act in range(len(unlearn_method.num_activations)):
+        for clamp_val in args.clamp_values:#,
+            print(f'CURRENT CONFIG ----> # of feat rem. {unlearn_method.num_activations[config_num_act]}, clamp val {clamp_val}, th_ratio {args.th_ratio}')
 
-metric_params = ['correct', 'correct-iff-question',  'correct-no-tricks']
-target_metric = 'correct'
-#BASELINE from sae Bench
-baseline_metrics = {}
-artifacts_folder = os.path.join(args.root_folder, "artifacts", 'unlearning', args.model_name)
-split = 'all'
+            hook_added = unlearn_method.get_model_with_sae(config_num_act,clamp_val)
+            
+            #funct for metrics
+            metrics = {}
+            for dataset_name in [x for x in dataset_names if x != "loss_added"]:
+                
+                metric_param = {"target_metric": target_metric, "verbose": False}
+                
+                metric = get_metrics(unlearn_method.model,unlearn_method.tokenizer, mcq_batch_size, artifacts_folder, 
+                                     res_folder_name = f"FIM_SAE_{args.sae_id.replace('/','_')}_clamp_{clamp_val}_num_act_{unlearn_method.num_activations[config_num_act]}_th_ratio_{args.th_ratio}",
+                                     dataset_name = dataset_name, 
+                                     metric_param = metric_param,
+                                     split=split)
+                
+                metrics[dataset_name] = metric
+            
+            #collect results
+            acc_wmdp = metrics['wmdp-bio']['mean_correct']
+            mmlu = np.asarray([metrics[i]['mean_correct'] for i in metrics.keys() if i != 'wmdp-bio'])
+            
+            all_results.append([unlearn_method.th_ratio,
+                                clamp_val,
+                                unlearn_method.num_activations[config_num_act],
+                                acc_wmdp,
+                                mmlu.mean(),
+                                mmlu.std()])
+            #
+            hook_added.remove()
 
-for dataset_name in [x for x in dataset_names if x != "loss_added"]:
-    # Ensure that target question ids exist
-    save_target_question_ids(unlearn_method.model, mcq_batch_size=1024, artifacts_folder, dataset_name)
-
-    metric_param = {"target_metric": target_metric, "verbose": False}
-
-    # metrics[dataset_name] = dataset_metrics
-
-    baseline_metric = get_baseline_metrics(unlearn_method.model, mcq_batch_size=1024, artifacts_folder, dataset_name, metric_param, split=split)
-
-    baseline_metrics[dataset_name] = baseline_metric
-
-
-
-# #LOOP
-# all_results = []
-# for config_num_act in range(len(unlearn_method.num_activations)):
-#     for clamp_val in args.clamp_val:#,
-#         print(f'CURRENT CONFIG ----> # of feat rem. {unlearn_method.num_activations[config_num_act]}, clamp val {clamp_val}, th_ratio {args.th_ratio}')
-#         hook_added = unlearn_method.get_model_with_sae(config_num_act,clamp_val)
-#         #funct for metrics
-
-#         #
-#         hook_added.remove()
+    df = pd.DataFrame(all_results,columns=['th_ratio','clamp_val','num_activations','acc_wmdp','acc_mmlu','std_mmlu'])
+    #save df to csv
+    Path(os.path.join(args.root_folder,'results_FIM_SAE',args.sae_id.replace('/','_'),'SAEBench')).mkdir(parents=True, exist_ok=True)
+    file_to_save = os.path.join(args.root_folder,'results_FIM_SAE',args.sae_id.replace("/","_"),'SAEBench',f'results_th_ratio_{args.th_ratio}.csv')
+    df.to_csv(file_to_save,index=False)
+    plot_results(input_folder=os.path.join(args.root_folder,'results_FIM_SAE',args.sae_id.replace("/","_"),'SAEBench'))

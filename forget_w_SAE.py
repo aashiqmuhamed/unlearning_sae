@@ -9,10 +9,10 @@ import os
 from pathlib import Path
 from utils import collate_fn,plot_importances,plot_results
 import pickle
-
+from copy import deepcopy
 
 class forget_w_SAE_CausalLM():
-    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[100,50,25,10,5],th_ratio = 10**3,batch_size=1):
+    def __init__(self, model_name,sae_name,sae_id,retain_dset,fgt_dset,use_error_term=True, device=None,num_activations=[100,50,25,10,5],th_ratio = 10**3,batch_size=1,input_model: AutoModelForCausalLM = None, input_tokenizer: AutoTokenizer= None):
         
         self.model_name = model_name
         self.sae_name = sae_name
@@ -24,12 +24,18 @@ class forget_w_SAE_CausalLM():
         else:
             self.device = device
         
-        self.model = AutoModelForCausalLM.from_pretrained(
+        if input_model is None:
+            self.model = AutoModelForCausalLM.from_pretrained(
                                                           self.model_name,
                                                           device_map=self.device)
-        
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        
+        else:
+            self.model = input_model
+
+        if input_tokenizer is None:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        else:
+            self.tokenizer = input_tokenizer
+
         self.sae, self.cfg_dict, self.sparsity = SAE.from_pretrained(
             release=self.sae_name,
             sae_id=self.sae_id, 
@@ -115,19 +121,20 @@ class forget_w_SAE_CausalLM():
         _,index = torch.sort(norm_vec_fgt_ratio)
 
 
-        id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
-        norm_vec_fgt[id_ratio] = 0
-        _,index_top = torch.sort(norm_vec_fgt)
-
-        index = torch.unique(torch.cat((index[-500:],index_top[-250:]),dim=0))
-        return index
         # id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
         # norm_vec_fgt[id_ratio] = 0
         # _,index_top = torch.sort(norm_vec_fgt)
 
-        # index_clean = index[~torch.isin(index,index_top[-num_act_rem_top:])]
+        # index = torch.unique(torch.cat((index[-500:],index_top[-250:]),dim=0))
+        # return index
+        id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
+        norm_vec_fgt_cp = deepcopy(norm_vec_fgt)
+        norm_vec_fgt[id_ratio] = 0
+        _,index_top = torch.sort(norm_vec_fgt)
 
-        # return torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0)
+        index_clean = index[~torch.isin(index,index_top[-num_act_rem_top:])]
+
+        return torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0),norm_vec_fgt_cp,norm_vec
 
 
         
@@ -167,14 +174,17 @@ class forget_w_SAE_CausalLM():
                 pickle.dump({'importances': self.importances_retain}, f)
             print("Importances rtn saved to cache")
 
-        plot_importances(self.importances_retain,self.importances_fgt)
+        
 
         #clean stuff
         del self.criterion_FIM,self.optimizer_FIM
         self.dict_indexes = {}
         for num_act_rem in self.num_activations:
-            self.dict_indexes[f'N_{num_act_rem}'] = self.get_activations_indexes(num_act_rem)
-
+            self.dict_indexes[f'N_{num_act_rem}'],norm_fgt,norm_rtn = self.get_activations_indexes(num_act_rem)
+            plot_importances(norm_fgt.detach().cpu().numpy(),
+                             norm_rtn.detach().cpu().numpy(),
+                             indexes = self.dict_indexes[f'N_{num_act_rem}'].detach().cpu().numpy(),
+                             filename=os.path.join('importances', f"{self.model_name.replace('/','_')}_{self.sae_id.replace('/','_')}_N_{num_act_rem}_th_{self.th_ratio}.png"))
     #add error term
     def add_sae_hook(self,mod,inputs,outputs): 
         activation = self.sae.encode(outputs[0])
