@@ -11,3 +11,4 @@ artifacts/
 data_wmdp_forget_corpora/
 results_FIM_SAE/
 old_files/
+__pycache__/    
