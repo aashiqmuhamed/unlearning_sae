@@ -120,6 +120,7 @@ class forget_w_SAE_CausalLM():
         norm_vec_fgt_ratio[norm_vec==0] = 0
         _,index = torch.sort(norm_vec_fgt_ratio)
 
+        #print(norm_vec_fgt_ratio[index[-num_act_rem:]])
 
         # id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
         # norm_vec_fgt[id_ratio] = 0
@@ -127,14 +128,14 @@ class forget_w_SAE_CausalLM():
 
         # index = torch.unique(torch.cat((index[-500:],index_top[-250:]),dim=0))
         # return index
-        id_ratio = (norm_vec_fgt_ratio<self.th_ratio)
+        id_ratio = (norm_vec_fgt_ratio>self.th_ratio)
         norm_vec_fgt_cp = deepcopy(norm_vec_fgt)
         norm_vec_fgt[id_ratio] = 0
         _,index_top = torch.sort(norm_vec_fgt)
 
         index_clean = index[~torch.isin(index,index_top[-num_act_rem_top:])]
-
-        return torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0),norm_vec_fgt_cp,norm_vec
+        #torch.cat((index_clean[-num_act_rem_th:],index_top[-num_act_rem_top:]),dim=0)
+        return index[-num_act_rem:],norm_vec_fgt_cp,norm_vec
 
 
         
