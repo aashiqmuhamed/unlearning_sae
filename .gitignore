@@ -8,5 +8,6 @@
 importances/
 results_forget_w_SAE/
 artifacts/
-data_wmdb_forget_corpora/
+data_wmdp_forget_corpora/
 results_FIM_SAE/
+old_files/
