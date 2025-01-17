@@ -75,14 +75,15 @@ class forget_w_SAE_CausalLM():
 
         ####
         #simple
-        #loss = self.criterion_FIM(recon[:,1:,:], target_act[:,1:,:])
+        loss = self.criterion_FIM(recon[:,1:,:], target_act[:,1:,:])
 
-        #select tokens which correspond to less than 5% of activations
+        #select tokens which correspond to less than 200 of activations
         #this filter removes tokens which don't exihibit strong token/few-concept connection 
-        feat_binary = (feat>0).sum(dim=2)/feat.shape[2]
-        id = (feat_binary<0.05).squeeze()
-        id[0] = False 
-        loss = self.criterion_FIM(recon[:,id,:], target_act[:,id,:])
+        # feat_binary = (feat>0).sum(dim=2)/feat.shape[2]
+        # id = (feat_binary<0.004).squeeze()
+        # id[0] = False 
+        #print(id.sum())
+        #loss = self.criterion_FIM(recon[:,id,:], target_act[:,id,:])
         loss.backward()
 
         for (k1, p), (k2, imp) in zip(self.sae.named_parameters(), self.importances.items()):
@@ -253,22 +254,11 @@ class forget_w_SAE_CausalLM():
    
         buff = activation[:,st:,self.index_to_rem]
 
-        # import pdb; pdb.set_trace()
-        # if st==1 and (buff>0).sum()/(buff.shape[1]*buff.shape[2]) > 0.05:
-        #     buff[buff>0]= self.clamp_val
-        #     self.model.flag_batch_activation.fill_(True)
-        # elif st==1 and (buff>0).sum()/(buff.shape[1]*buff.shape[2]) < 0.05:
-        #     self.model.flag_batch_activation.fill_(False)
-
- 
-        # if self.model.flag_batch_activation:    
-        #     buff[buff>0]= self.clamp_val
         ##########################################################
         #dynamic selection of activations
         ##########################################################
         if st==1:
             self.model.flag_batch_activation = ((buff>0).sum(dim=(1,2))/(buff.shape[1]*buff.shape[2])>0.01)
-            print((buff>0).sum(dim=(1,2))/(buff.shape[1]*buff.shape[2]))
         index_active = (buff>0)
         index_active[self.model.flag_batch_activation==False,:,:] = False
         buff[index_active] = self.clamp_val
