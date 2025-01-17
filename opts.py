@@ -8,13 +8,13 @@ def create_parser():
     # Required arguments
     parser.add_argument("--model_name",default = 'google/gemma-2-2b-it', type=str, help="Name of the model")
     parser.add_argument("--sae_name",default="gemma-scope-2b-pt-res-canonical", type=str, help="Name of the SAE")
-    parser.add_argument("--sae_id",default = "layer_3/width_16k/canonical", type=str, help="ID of the SAE")
+    parser.add_argument("--sae_id",default = "layer_3/width_65k/canonical", type=str, help="ID of the SAE")
     parser.add_argument("--retain_dset",default = 'wikitext', type=str, help="Retain dataset")
     parser.add_argument("--fgt_dset",default = 'wmdp_forget_corpora', type=str, help="Forget dataset")
 
     parser.add_argument("--run_baseline", action='store_true')
     parser.add_argument("--run_unlearn", action='store_true')
-
+    parser.add_argument("--recompute", action='store_true')
 
     # Optional arguments
     parser.add_argument("--use_error_term", type=bool, default=True, help="Use error term (default: True)")

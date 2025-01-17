@@ -71,6 +71,7 @@ def calculate_MCQ_metrics(
     without_question: bool = False,
     prompt_format: Optional[str] = None,
     split: str = "all",
+    device: str = "cuda:0",
     **kwargs: Any,
 ) -> dict[str, Any]:
     """
@@ -184,7 +185,7 @@ def calculate_MCQ_metrics(
 
     #if isinstance(model, HookedTransformer):
     output_probs = get_output_probs_abcd(
-        model,tokenizer, prompts, batch_size=batch_size, n_batches=n_batches, verbose=verbose
+        model,tokenizer, prompts, batch_size=batch_size,device=device, n_batches=n_batches, verbose=verbose
     )
     #else:
         # output_probs = get_output_probs_abcd_hf(
@@ -201,7 +202,7 @@ def calculate_MCQ_metrics(
 
     n_predicted_answers = len(predicted_answers)
 
-    actual_answers = torch.tensor(actual_answers)[:n_predicted_answers].to("cuda")
+    actual_answers = torch.tensor(actual_answers)[:n_predicted_answers].to(device)
 
     predicted_prob_of_correct_answers = output_probs[
         torch.arange(len(actual_answers)), actual_answers
@@ -231,7 +232,7 @@ def calculate_MCQ_metrics(
     return metrics
 
 
-def get_output_probs_abcd(model,tokenizer, prompts, batch_size=2, n_batches=100, verbose=True):
+def get_output_probs_abcd(model,tokenizer, prompts, batch_size=2,device='cuda', n_batches=100, verbose=True):
     """
     Calculates probability of selecting A, B, C, & D for a given input prompt
     and language model. Returns tensor of shape (len(prompts), 4).
@@ -264,17 +265,17 @@ def get_output_probs_abcd(model,tokenizer, prompts, batch_size=2, n_batches=100,
 
             # prepend_bos is False because the prompt already has a BOS token due to the instruct format
             token_batch = tokenizer(prompt_batch, padding=True,padding_side="right",return_tensors='pt',add_special_tokens=False)["input_ids"].to(
-                "cuda"
+                device
             )#,max_length=1024 can be added with padding = 'max_length'
 
             assert (token_batch == tokenizer.bos_token_id).sum().item() == len(token_batch)
 
             token_lens = [len(tokenizer(x,return_tensors='pt',add_special_tokens=False)['input_ids'][0]) for x in prompt_batch]
-            next_token_indices = torch.tensor([x - 1 for x in token_lens]).to("cuda")
+            next_token_indices = torch.tensor([x - 1 for x in token_lens]).to(device)
 
             vals = model(token_batch).logits
             #import pdb; pdb.set_trace()
-            vals = vals[torch.arange(current_batch_size).to("cuda"), next_token_indices].softmax(-1)
+            vals = vals[torch.arange(current_batch_size).to(device), next_token_indices].softmax(-1)
             # vals = torch.vstack([x[i] for x, i in zip(vals, next_token_indices)]).softmax(-1)
             # vals = vals[0, -1].softmax(-1)
             vals = vals[:, answer_tokens]
@@ -496,6 +497,7 @@ def get_metrics(
     metric_param,
     recompute=False,
     split="all",
+    device='cuda:0'
     
 ):
     """
@@ -535,6 +537,7 @@ def get_metrics(
             artifacts_folder,
             dataset_name=dataset_name,
             split=split,
+            device=device,
             **metric_param,
         )
 

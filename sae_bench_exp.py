@@ -7,7 +7,7 @@ import pandas as pd
 
 from datasets import load_dataset,concatenate_datasets    
 from metrics_SAEbench import get_metrics,save_target_question_ids
-from utils import plot_results
+from utils import plot_results,plot_sentence_length_distribution
 import os
 from pathlib import Path
 
@@ -16,7 +16,9 @@ args = get_args()
 #DATASETS
 if args.fgt_dset == 'wmdp_forget_corpora':    
     fgt_set = load_dataset('json',data_files=args.root_folder+"data_wmdp_forget_corpora/bio_remove_dataset.jsonl")['train']
+    fgt_set = fgt_set.filter(lambda x: len(x["text"])>50)
     fgt_set.shuffle(seed=42)
+    #plot_sentence_length_distribution(fgt_set, "wmdp_forget_corpora")
 else:
     raise NotImplementedError
 
@@ -25,14 +27,16 @@ if args.retain_dset == 'wikitext':
     #filter wikitext for sentences <50
     retain_set = wikitext.filter(lambda x: len(x["text"])>50)
     retain_set.shuffle(seed=42)
+    #plot_sentence_length_distribution(retain_set, "wikitext")
 else:
     raise NotImplementedError
 
 dataset_names = ["wmdp-bio",
+                 "human_aging",
                  "high_school_us_history",
                  "college_computer_science",
                  "high_school_geography",
-                 "human_aging"]
+            ]
 
 #metric_params = ['correct', 'correct-iff-question',  'correct-no-tricks']
 target_metric = 'correct'
@@ -67,6 +71,7 @@ if args.run_baseline:
     
 #CALL Unlearning Method class    
 if args.run_unlearn:
+
     unlearn_method = forget_w_SAE_CausalLM(model_name = args.model_name,
                                     sae_name = args.sae_name,
                                     sae_id=args.sae_id,
@@ -85,20 +90,24 @@ if args.run_unlearn:
     for config_num_act in range(len(unlearn_method.num_activations)):
         for clamp_val in args.clamp_values:#,
             print(f'CURRENT CONFIG ----> # of feat rem. {unlearn_method.num_activations[config_num_act]}, clamp val {clamp_val}, th_ratio {args.th_ratio}')
-
+            #chamge buffer_size since batch for this exp is set to mcq_batch_size
+            unlearn_method.model.flag_batch_activation = torch.tensor([False for _ in range(mcq_batch_size)], dtype=torch.bool)
+            
             hook_added = unlearn_method.get_model_with_sae(config_num_act,clamp_val)
             
             #funct for metrics
             metrics = {}
             for dataset_name in [x for x in dataset_names if x != "loss_added"]:
-                
+                print('Analysing dataset: ', dataset_name)
                 metric_param = {"target_metric": target_metric, "verbose": False}
                 
                 metric = get_metrics(unlearn_method.model,unlearn_method.tokenizer, mcq_batch_size, artifacts_folder, 
                                      res_folder_name = f"FIM_SAE_{args.sae_id.replace('/','_')}_clamp_{clamp_val}_num_act_{unlearn_method.num_activations[config_num_act]}_th_ratio_{args.th_ratio}",
                                      dataset_name = dataset_name, 
                                      metric_param = metric_param,
-                                     split=split)
+                                     split=split,
+                                     device=args.device,
+                                     recompute=args.recompute)
                 
                 metrics[dataset_name] = metric
             
@@ -113,6 +122,7 @@ if args.run_unlearn:
                                 mmlu.mean(),
                                 mmlu.std()])
             #
+            print('Current results: ',all_results[-1])
             hook_added.remove()
 
     df = pd.DataFrame(all_results,columns=['th_ratio','clamp_val','num_activations','acc_wmdp','acc_mmlu','std_mmlu'])
