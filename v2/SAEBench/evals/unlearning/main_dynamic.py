@@ -16,6 +16,10 @@ import argparse
 from datetime import datetime
 from transformer_lens import HookedTransformer
 from sae_lens import SAE
+import sys
+folder_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+if folder_path not in sys.path:
+    sys.path.append(folder_path)
 from evals.unlearning.eval_output import (
     UnlearningEvalOutput,
     UnlearningMetricCategories,
@@ -23,7 +27,7 @@ from evals.unlearning.eval_output import (
 )
 from evals.unlearning.utils.eval_dynamic import run_eval_single_sae
 import sae_bench_utils.activation_collection as activation_collection
-from evals.unlearning.eval_config import UnlearningEvalConfig
+from evals.unlearning.eval_config import UnlearningEvalConfig,UnlearningEvalConfig_cyber
 from sae_bench_utils import (
     get_eval_uuid,
     get_sae_lens_version,
@@ -39,7 +43,7 @@ EVAL_TYPE = "unlearning"
 
 
 def get_params(string):
-    pattern = r"multiplier(\d+)_nfeatures(\d+)_layer(\d+)_retainthres(\d+(?:\.\d+)?).pkl"
+    pattern = r"multiplier(\d+)_nfeatures(\d+)_layer(\d+)_retainthres(\d+(?:\.\d+)?)_seed(\d+(?:\.\d+)?).pkl"
     match = re.search(pattern, string)
     if match:
         return match.groups()  # multiplier, nfeatures, layer, retainthres
@@ -57,7 +61,7 @@ def get_metrics_df(metrics_dir):
 
         file_name = os.path.basename(file_path)
         sae_folder = os.path.dirname(file_path)
-        multiplier, n_features, layer, retain_thres = get_params(file_name)
+        multiplier, n_features, layer, retain_thres,seed = get_params(file_name)
 
         row = {}
         n_se_questions = 0
@@ -133,7 +137,7 @@ def run_eval(
     os.makedirs(output_path, exist_ok=True)
 
     # artifacts_folder = os.path.join("artifacts_dynamic_percentile", EVAL_TYPE, config.model_name)
-    artifacts_folder = os.path.join("artifacts_dynamic_bs1", EVAL_TYPE, config.model_name)
+    artifacts_folder = os.path.join(args.exp_name+'_'+args.case, EVAL_TYPE, config.model_name)
 
     results_dict = {}
 
@@ -143,7 +147,7 @@ def run_eval(
     torch.manual_seed(config.random_seed)
 
     model = HookedTransformer.from_pretrained_no_processing(
-        config.model_name, device=device, dtype=config.llm_dtype, cache_dir="/data/datasets/wmdp_test/model_dir"
+        config.model_name, device=device, dtype=config.llm_dtype
     )
 
     for sae_release, sae_object_or_id in tqdm(
@@ -155,7 +159,6 @@ def run_eval(
         sae = sae.to(device=device, dtype=llm_dtype)
 
         sae_result_path = general_utils.get_results_filepath(output_path, sae_release, sae_id)
-
         if os.path.exists(sae_result_path) and not force_rerun:
             print(f"Skipping {sae_release}_{sae_id} as results already exist")
             continue
@@ -165,47 +168,54 @@ def run_eval(
         sae_results_folder = os.path.join(artifacts_folder, sae_release_and_id, "results/metrics")
 
         run_eval_single_sae(model, sae, config, artifacts_folder, sae_release_and_id, force_rerun)
-        sae_results_folder = os.path.join(artifacts_folder, sae_release_and_id, "results/metrics")
-        metrics_df = get_metrics_df(sae_results_folder)
-        unlearning_score = get_unlearning_scores(metrics_df)
-        eval_output = UnlearningEvalOutput(
-            eval_config=config,
-            eval_id=eval_instance_id,
-            datetime_epoch_millis=int(datetime.now().timestamp() * 1000),
-            eval_result_metrics=UnlearningMetricCategories(
-                unlearning=UnlearningMetrics(unlearning_score=unlearning_score)
-            ),
-            eval_result_details=[],
-            sae_bench_commit_hash=sae_bench_commit_hash,
-            sae_lens_id=sae_id,
-            sae_lens_release_id=sae_release,
-            sae_lens_version=sae_lens_version,
-            sae_cfg_dict=asdict(sae.cfg),
-        )
+    #     sae_results_folder = os.path.join(artifacts_folder, sae_release_and_id, "results/metrics")
+    #     metrics_df = get_metrics_df(sae_results_folder)
+    #     unlearning_score = get_unlearning_scores(metrics_df)
+    #     eval_output = UnlearningEvalOutput(
+    #         eval_config=config,
+    #         eval_id=eval_instance_id,
+    #         datetime_epoch_millis=int(datetime.now().timestamp() * 1000),
+    #         eval_result_metrics=UnlearningMetricCategories(
+    #             unlearning=UnlearningMetrics(unlearning_score=unlearning_score)
+    #         ),
+    #         eval_result_details=[],
+    #         sae_bench_commit_hash=sae_bench_commit_hash,
+    #         sae_lens_id=sae_id,
+    #         sae_lens_release_id=sae_release,
+    #         sae_lens_version=sae_lens_version,
+    #         sae_cfg_dict=asdict(sae.cfg),
+    #     )
 
-        results_dict[f"{sae_release}_{sae_id}"] = asdict(eval_output)
+    #     results_dict[f"{sae_release}_{sae_id}"] = asdict(eval_output)
 
-        eval_output.to_json_file(sae_result_path, indent=2)
+    #     eval_output.to_json_file(sae_result_path, indent=2)
 
-        gc.collect()
-        torch.cuda.empty_cache()
+    #     gc.collect()
+    #     torch.cuda.empty_cache()
 
-    if clean_up_artifacts:
-        for folder in os.listdir(artifacts_folder):
-            folder_path = os.path.join(artifacts_folder, folder)
-            if os.path.isdir(folder_path) and folder != "data":
-                shutil.rmtree(folder_path)
+    # if clean_up_artifacts:
+    #     for folder in os.listdir(artifacts_folder):
+    #         folder_path = os.path.join(artifacts_folder, folder)
+    #         if os.path.isdir(folder_path) and folder != "data":
+    #             shutil.rmtree(folder_path)
 
-    return results_dict
+    return [] #@results_dict
 
 
 def create_config_and_selected_saes(
     args,
 ) -> tuple[UnlearningEvalConfig, list[tuple[str, str]]]:
-    config = UnlearningEvalConfig(
-        model_name=args.model_name,
-    )
-
+    if args.case == "bio":
+        config = UnlearningEvalConfig(
+            model_name=args.model_name,
+        )
+    elif args.case == "cyber":
+        config = UnlearningEvalConfig_cyber(
+            model_name=args.model_name,
+        )
+    else:
+        raise ValueError("Invalid case")
+    
     if args.llm_batch_size is not None:
         config.llm_batch_size = args.llm_batch_size
     else:
@@ -234,6 +244,8 @@ def arg_parser():
     parser = argparse.ArgumentParser(description="Run unlearning evaluation")
     parser.add_argument("--random_seed", type=int, default=None, help="Random seed")
     parser.add_argument("--model_name", type=str, required=True, help="Model name")
+    parser.add_argument("--exp_name", type=str, default="artifacts_dynamic_bs1")
+    parser.add_argument("--case", type=str, default="bio")
     parser.add_argument(
         "--sae_regex_pattern",
         type=str,
@@ -297,7 +309,7 @@ if __name__ == "__main__":
     start_time = time.time()
 
     config, selected_saes = create_config_and_selected_saes(args)
-
+    config.random_seed = args.random_seed
     # import pdb; pdb.set_trace()
 
     print(selected_saes)
@@ -318,7 +330,6 @@ if __name__ == "__main__":
     end_time = time.time()
 
     print(f"Finished evaluation in {end_time - start_time} seconds")
-
 # Use this code snippet to use custom SAE objects
 # if __name__ == "__main__":
 #     import custom_saes.identity_sae as identity_sae

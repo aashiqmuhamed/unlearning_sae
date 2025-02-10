@@ -95,6 +95,7 @@ def run_metrics_calculation(
             save_metrics=config.save_metrics,
             save_metrics_dir=save_metrics_dir,
             retain_threshold=retain_threshold,
+            seed=config.random_seed,
         )
 
     return metrics_lst
@@ -123,6 +124,9 @@ def run_eval_single_sae(
         config.dataset_size,
         config.seq_len,
         config.llm_batch_size,
+        config.dataset_fraction,
+        fgt_set=config.fgt_set,
+        retain_set=config.retain_set,
     )
     forget_sparsity, retain_sparsity = load_sparsity_data(artifacts_folder, sae_release_and_id)
 

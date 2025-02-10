@@ -22,7 +22,24 @@ RETAIN_FILENAME = "feature_sparsity_retain.txt"
 
 SPARSITIES_DIR = "results/sparsities"
 
-
+def collate_fn(batch):
+    texts = []
+    for item in batch:
+        #import pdb; pdb.set_trace()
+        if 'choices' in item:
+            task_description = "The following are multiple choice questions (with answers).\n\n"            
+            prompts = []#
+            prompt = task_description + f"{item['question']}\nA: {item['choices'][0]}\nB: {item['choices'][1]}\nC: {item['choices'][2]}\nD: {item['choices'][3]}\nAnswer:"
+            texts.append(prompt)
+        elif 'text' in item:
+            texts.append(item['text'])
+        else:
+            texts.append(item)
+    # tokenized = tokenizer(texts, add_special_tokens=True, padding=False, truncation=True)
+    # tokenized['input_ids'] = torch.tensor(pad_sequences(tokenized['input_ids']))
+    # tokenized['attention_mask'] = torch.tensor(pad_sequences(tokenized['attention_mask']))
+    return texts
+ 
 def get_forget_retain_data(
     forget_corpora: str = "bio-forget-corpus",
     retain_corpora: str = "wikitext",
@@ -36,22 +53,35 @@ def get_forget_retain_data(
         for x in raw_retain:
             if len(x["text"]) > min_len:
                 retain_dataset.append(str(x["text"]))
+        #############################
+        if forget_corpora != "bio-forget-corpus":
+            concat_el = load_dataset("cais/wmdp", "wmdp-chem",split='test')
+            list_of_str = collate_fn(concat_el)
+            retain_dataset = retain_dataset + list_of_str
+    #retain_set = concatenate_datasets([retain_set,new_dataset])
+
     else:
         raise Exception("Unknown retain corpora")
 
     forget_dataset = []
-    for num, line in enumerate(open(f"./evals/unlearning/data/{forget_corpora}.jsonl", "r")):
-        if "bio-forget-corpus" in forget_corpora:
-            try:
-                raw_text = json.loads(line)["text"]
-            except Exception as e:
-                import pdb; pdb.set_trace()
-            #     raw_text = line
-        else:
-            raw_text = line
-        if len(raw_text) > min_len:
-            forget_dataset.append(str(raw_text))
+    if "bio-forget-corpus" in forget_corpora:
+        for num, line in enumerate(open(f"./evals/unlearning/data/{forget_corpora}.jsonl", "r")):
+            if "bio-forget-corpus" in forget_corpora:
+                try:
+                    raw_text = json.loads(line)["text"]
+                except Exception as e:
+                    import pdb; pdb.set_trace()
+                #     raw_text = line
+            else:
+                raw_text = line
+            if len(raw_text) > min_len:
+                forget_dataset.append(str(raw_text))
 
+    elif "cyber-forget-corpus" in forget_corpora:
+        forget_dataset = load_dataset("cais/wmdp-corpora", "cyber-forget-corpus",split='train')
+        forget_dataset = forget_dataset.filter(lambda x: len(x["text"])>min_len)
+        forget_dataset.shuffle(seed=42)
+        forget_dataset = forget_dataset["text"]
     return forget_dataset, retain_dataset
 
 
@@ -61,6 +91,7 @@ def get_shuffled_forget_retain_tokens(
     retain_corpora: str = "wikitext",
     batch_size: int = 2048,
     seq_len: int = 1024,
+    dataset_fraction: int = 100
 ):
     """
     get shuffled forget tokens and retain tokens, with given batch size and sequence length
@@ -83,8 +114,10 @@ def get_shuffled_forget_retain_tokens(
     print(forget_tokens.shape, retain_tokens.shape)
     shuffled_forget_tokens = forget_tokens[torch.randperm(forget_tokens.shape[0])]
     shuffled_retain_tokens = retain_tokens[torch.randperm(retain_tokens.shape[0])]
-
-    return shuffled_forget_tokens[:batch_size], shuffled_retain_tokens[:batch_size]
+    batch_size_cmn = min(int(batch_size*dataset_fraction/100),min(int(shuffled_forget_tokens.shape[0]*dataset_fraction/100),int(shuffled_retain_tokens.shape[0]*dataset_fraction/100)))
+    
+    print('tokens size: ',batch_size_cmn)
+    return shuffled_forget_tokens[:batch_size_cmn], shuffled_retain_tokens[:batch_size_cmn]
 
 
 def gather_residual_activations(model: HookedTransformer, target_layer: int, inputs):
@@ -324,14 +357,20 @@ def save_feature_sparsity(
     dataset_size: int,
     seq_len: int,
     batch_size: int,
+    dataset_fraction:int,
+    fgt_set: str,
+    retain_set: str
 ):
-    if check_existing_results(artifacts_folder, sae_name):
-        print(f"Sparsity calculation for {sae_name} is already done")
-        return
-
+    #if check_existing_results(artifacts_folder, sae_name):
+    #    print(f"Sparsity calculation for {sae_name} is already done")
+    #    return
     forget_tokens, retain_tokens = get_shuffled_forget_retain_tokens(
-        model, batch_size=dataset_size, seq_len=seq_len
-    )
+                                                                    model, 
+                                                                    batch_size=dataset_size,
+                                                                    seq_len=seq_len,
+                                                                    dataset_fraction=dataset_fraction,
+                                                                    forget_corpora=fgt_set,
+                                                                    retain_corpora=retain_set)
 
     feature_sparsity_forget, feature_sparsity_retain = calculate_sparsity(
         model, sae, forget_tokens, retain_tokens, batch_size

@@ -17,7 +17,7 @@ def anthropic_clamp_resid_SAE_features(
     sae: SAE,
     features_to_ablate: list[int],
     multiplier: float = 1.0,
-    activation_threshold: float = 0.05,
+    activation_threshold: float = 0.01,
     random: bool = False,
 ) -> Float[Tensor, "batch seq d_model"]:
     """
@@ -40,6 +40,7 @@ def anthropic_clamp_resid_SAE_features(
         batch_activation_rates = activation_mask.sum(dim=(1, 2)) / (
             activation_mask.shape[1] * activation_mask.shape[2]
         )
+        print(batch_activation_rates)
         active_batches = batch_activation_rates > activation_threshold
         
         # Create final mask combining feature activation and batch threshold

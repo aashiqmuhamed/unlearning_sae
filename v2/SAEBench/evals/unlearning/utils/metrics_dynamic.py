@@ -27,6 +27,7 @@ from evals.unlearning.utils.var import (
     GEMMA_INST_FORMAT,
     MIXTRAL_INST_FORMAT,
     PRE_WMDP_BIO,
+    PRE_WMDP_CYBER,
     PRE_QUESTION_FORMAT,
 )
 from evals.unlearning.utils.intervention_dynamic import anthropic_clamp_resid_SAE_features
@@ -100,6 +101,9 @@ def calculate_MCQ_metrics(
     if dataset_name == "wmdp-bio":
         pre_question = PRE_WMDP_BIO
         dataset = load_dataset_with_retries("cais/wmdp", "wmdp-bio", split="test")
+    elif dataset_name == "wmdp-cyber":
+        pre_question = PRE_WMDP_CYBER
+        dataset = load_dataset_with_retries("cais/wmdp", "wmdp-cyber", split="test")
     else:
         pre_question = PRE_QUESTION_FORMAT.format(subject=dataset_name.replace("_", " "))
         # pre_question = 'The following are multiple choice questions (with answers) about history'
@@ -108,6 +112,7 @@ def calculate_MCQ_metrics(
     answers = [x["answer"] for x in dataset]
     questions = [x["question"] for x in dataset]
     choices_list = [x["choices"] for x in dataset]
+    print('len(questions):', len(questions),' permutations number:', len(permutations))
 
     # Select subset of questions
     assert target_metric in [
@@ -118,10 +123,11 @@ def calculate_MCQ_metrics(
         "all",
     ], "target_metric not recognised"
     assert split in ["all", "train", "test"], "split not recognised"
+
     if target_metric is not None:
         model_name = model.cfg.model_name
         full_dataset_name = (
-            f'mmlu-{dataset_name.replace("_", "-")}' if dataset_name != "wmdp-bio" else dataset_name
+            f'mmlu-{dataset_name.replace("_", "-")}' if (dataset_name != "wmdp-bio" and dataset_name != "wmdp-cyber") else dataset_name
         )
         question_subset_file = f"data/question_ids/{split}/{full_dataset_name}_{target_metric}.csv"
         question_subset_file = os.path.join(artifacts_folder, question_subset_file)
@@ -500,7 +506,7 @@ def get_baseline_metrics(
     model.reset_hooks()
 
     full_dataset_name = (
-        f'mmlu-{dataset_name.replace("_", "-")}' if dataset_name != "wmdp-bio" else dataset_name
+        f'mmlu-{dataset_name.replace("_", "-")}' if (dataset_name != "wmdp-bio" and dataset_name != "wmdp-cyber") else dataset_name
     )
     model_name = model.cfg.model_name
     q_type = metric_param["target_metric"]
@@ -578,6 +584,7 @@ def modify_and_calculate_metrics(
     modify_model(model, sae, **ablate_params)
 
     for dataset_name in dataset_names:
+        print(dataset_name)
         if dataset_name in metric_params:
             metric_param = metric_params[dataset_name]
         else:
@@ -591,6 +598,7 @@ def modify_and_calculate_metrics(
             split=split,
             **metric_param,
         )
+        print(dataset_metrics['mean_correct'])
         metrics_for_current_ablation[dataset_name] = dataset_metrics
 
     model.reset_hooks()
@@ -629,6 +637,7 @@ def calculate_metrics_list(
     save_metrics=False,
     save_metrics_dir=None,
     retain_threshold=None,
+    seed=None,
 ):
     """
     Calculate metrics for combinations of ablations
@@ -640,8 +649,9 @@ def calculate_metrics_list(
     baseline_metrics = {}
 
     for dataset_name in [x for x in dataset_names if x != "loss_added"]:
+        print('DATASET NAME:', dataset_name)
         # Ensure that target question ids exist
-        save_target_question_ids(model, mcq_batch_size, artifacts_folder, dataset_name)
+        save_target_question_ids(model, mcq_batch_size, artifacts_folder, dataset_name)#
 
         if dataset_name in metric_params:
             metric_param = metric_params[dataset_name]
@@ -671,7 +681,7 @@ def calculate_metrics_list(
         n_features = len(ablate_params["features_to_ablate"])
         layer = sae.cfg.hook_layer
 
-        save_file_name = f"{intervention_method}_multiplier{multiplier}_nfeatures{n_features}_layer{layer}_retainthres{retain_threshold}.pkl"
+        save_file_name = f"{intervention_method}_multiplier{multiplier}_nfeatures{n_features}_layer{layer}_retainthres{retain_threshold}_seed{seed}.pkl"
         full_path = os.path.join(save_metrics_dir, save_file_name)
 
         if os.path.exists(full_path) and not force_rerun:
@@ -768,7 +778,7 @@ def save_target_question_ids(
     """
 
     full_dataset_name = (
-        f'mmlu-{dataset_name.replace("_", "-")}' if dataset_name != "wmdp-bio" else dataset_name
+        f'mmlu-{dataset_name.replace("_", "-")}' if (dataset_name != "wmdp-bio" and dataset_name != "wmdp-cyber") else dataset_name
     )
     model_name = model.cfg.model_name
 
@@ -842,6 +852,8 @@ def _find_correct_iff_question(correct_questions, metrics_wo_question):
 def load_dataset_from_name(dataset_name: str):
     if dataset_name == "wmdp-bio":
         dataset = load_dataset("cais/wmdp", "wmdp-bio", split="test")
+    elif dataset_name == "wmdp-cyber": 
+        dataset = load_dataset("cais/wmdp", "wmdp-cyber", split="test")   
     else:
         dataset = load_dataset("cais/mmlu", dataset_name, split="test")
     return dataset
