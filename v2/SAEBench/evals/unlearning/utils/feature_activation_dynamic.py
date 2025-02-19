@@ -57,8 +57,7 @@ def get_forget_retain_data(
         if forget_corpora != "bio-forget-corpus":
             concat_el = load_dataset("cais/wmdp", "wmdp-chem",split='test')
             list_of_str = collate_fn(concat_el)
-            retain_dataset = retain_dataset + list_of_str
-    #retain_set = concatenate_datasets([retain_set,new_dataset])
+            #retain_dataset = retain_dataset + list_of_str
 
     else:
         raise Exception("Unknown retain corpora")
@@ -189,11 +188,64 @@ def get_top_features_percentile(
         (retain_score <= retain_threshold) &        # Low retain importance
         (importance_ratio >= ratio_threshold)       # High forget/retain ratio
     )[0]
-    
+    sel_ind_out = selected_features[np.argsort(-forget_score[selected_features])]
+    sel_ind = sel_ind_out[:20]
+    # plot_colored_points(retain_score,forget_score, sel_ind)
+    # import pdb; pdb.set_trace()
     # Sort by forget importance
-    return selected_features[np.argsort(-forget_score[selected_features])]
+    #load activations
+    import pickle
+    with open('act_fgt.pkl', 'rb') as f:
+        act_fgt = pickle.load(f)
+    with open('act_ret.pkl', 'rb') as f:
+        act_ret = pickle.load(f)
 
+    distrib = []
+    for el in act_fgt:
+        buff  = el[:,:,sel_ind]
+        buff = buff>0
+        buff2 = (buff.sum(axis=2)>0)
+        #print(buff.shape,buff2.sum()/buff2.shape[1])
+        distrib.append(buff.sum(axis=(1, 2)) / (buff.shape[1] * buff.shape[2]))
+    distrib = np.asarray(distrib)
+    print('percentili 1 e 5 fgt: ',np.percentile(distrib,1),np.percentile(distrib,5))    
     
+    distrib = []
+
+    for el in act_ret:
+        buff  = el[:,:,sel_ind]
+        buff = buff>0
+        buff2 = (buff.sum(axis=2)>0)
+        #print(buff2.sum()/buff2.shape[1])
+        distrib.append(buff2.sum()/buff2.shape[1])#buff.sum(axis=(1, 2)) / (buff.shape[1] * buff.shape[2]))
+    distrib = np.asarray(distrib)
+    print('percentili 95 e 99 ret: ',np.percentile(distrib,95),np.percentile(distrib,99))
+    
+    return sel_ind_out
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_colored_points(vec1, vec2, indices):
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    # Plot all points in blue
+    ax.scatter(vec1, vec2, s=1, color='blue', label='All Points')
+    
+    # Highlight points corresponding to indices in red
+    ax.scatter(vec1[indices], vec2[indices], s=1, color='red', label='Highlighted Points')
+    
+    # Set axis to log scale
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    
+    # Add labels and legend
+    ax.set_xlabel('retain')
+    ax.set_ylabel('forget')
+    ax.legend()
+    
+    # Save the plot
+    plt.savefig('/home/jb/Documents/unlearning_sae/v2/SAEBench/feature_sparsity.png')
 
 def get_top_features_threshold(
     forget_grad_norm: np.ndarray,
@@ -266,23 +318,18 @@ def check_existing_results(artifacts_folder: str, sae_name) -> bool:
 
 
 def calculate_sparsity(
-    model: HookedTransformer, sae: SAE, forget_tokens, retain_tokens, batch_size: int
-):
-    feature_sparsity_forget = (
-        get_feature_activation_sparsity(
+    model: HookedTransformer, sae: SAE, forget_tokens, retain_tokens, batch_size: int):
+
+    feature_sparsity_forget,act_fgt = get_feature_activation_sparsity(
             forget_tokens,
             model,
             sae,
             batch_size=batch_size,
             layer=sae.cfg.hook_layer,
             hook_name=sae.cfg.hook_name,
-            mask_bos_pad_eos_tokens=True,
-        )
-        .cpu()
-        .numpy()
-    )
-    feature_sparsity_retain = (
-        get_feature_activation_sparsity(
+            mask_bos_pad_eos_tokens=True,)
+
+    feature_sparsity_retain,act_ret = get_feature_activation_sparsity(
             retain_tokens,
             model,
             sae,
@@ -291,10 +338,15 @@ def calculate_sparsity(
             hook_name=sae.cfg.hook_name,
             mask_bos_pad_eos_tokens=True,
         )
-        .cpu()
-        .numpy()
-    )
-    return feature_sparsity_forget, feature_sparsity_retain
+    #save the activations which are lists of numpy vectors use pickle
+    #import pdb; pdb.set_trace()
+    import pickle
+    with open('act_fgt.pkl', 'wb') as f:
+        pickle.dump(act_fgt, f)
+    with open('act_ret.pkl', 'wb') as f:
+        pickle.dump(act_ret, f)
+    
+    return feature_sparsity_forget.cpu().numpy(), feature_sparsity_retain.cpu().numpy()
 
 
 def calculate_sparsity_old(

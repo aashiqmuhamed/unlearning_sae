@@ -81,7 +81,7 @@ def run_metrics_calculation(
         metrics_lst = calculate_metrics_list(
             model,
             (
-                config.llm_batch_size * 2
+                config.llm_batch_size #* 2
             ),  # multiple choice questions are shorter, so we can afford a larger batch size
             sae,
             main_ablate_params,

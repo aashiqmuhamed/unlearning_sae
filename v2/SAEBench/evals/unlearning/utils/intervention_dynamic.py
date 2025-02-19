@@ -17,13 +17,14 @@ def anthropic_clamp_resid_SAE_features(
     sae: SAE,
     features_to_ablate: list[int],
     multiplier: float = 1.0,
-    activation_threshold: float = 0.01,
+    activation_threshold: float = 0.21,
     random: bool = False,
 ) -> Float[Tensor, "batch seq d_model"]:
     """
     Enhanced version of Anthropic's feature clamping that adds dynamic filtering based on activation patterns.
     """
     if len(features_to_ablate) > 0:
+        #print(resid.shape)
         # Encode residual stream and zero out BOS token
         feature_activations = sae.encode(resid)
         feature_activations[:, 0, :] = 0.0
@@ -35,16 +36,18 @@ def anthropic_clamp_resid_SAE_features(
         # Create mask for features that exceed activation threshold
         target_features = feature_activations[:, :, features_to_ablate]
         activation_mask = target_features > 0
-        
+        buff2 = (target_features.sum(dim=2)>0)
+        ccc = buff2.sum()/buff2.shape[1]
         # Calculate which batches exceed the activation threshold
         batch_activation_rates = activation_mask.sum(dim=(1, 2)) / (
             activation_mask.shape[1] * activation_mask.shape[2]
         )
-        print(batch_activation_rates)
-        active_batches = batch_activation_rates > activation_threshold
-        
+        #print(batch_activation_rates)
+        #import pdb; pdb.set_trace() 
+        active_batches = ccc > activation_threshold#batch_activation_rates
+        print(ccc)
         # Create final mask combining feature activation and batch threshold
-        final_mask = activation_mask & active_batches.unsqueeze(1).unsqueeze(2)
+        final_mask = activation_mask & active_batches#.unsqueeze(1).unsqueeze(2)
         
         # Apply clamping to selected features
         feature_activations[:, :, features_to_ablate] = torch.where(

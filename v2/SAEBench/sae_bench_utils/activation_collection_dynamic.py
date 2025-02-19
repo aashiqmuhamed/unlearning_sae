@@ -239,7 +239,7 @@ def get_feature_activation_sparsity_old(
     return running_sum_F / total_tokens
 
 # Aashiq: Uses feature activation squared or not squared (best percentile method)
-@jaxtyped(typechecker=beartype)
+#@jaxtyped(typechecker=beartype)
 @torch.no_grad
 def get_feature_activation_sparsity(
     tokens: Int[torch.Tensor, "dataset_size seq_len"],
@@ -257,6 +257,8 @@ def get_feature_activation_sparsity(
     running_sum_F = torch.zeros(sae.W_dec.shape[0], dtype=torch.float32, device=device)
     total_tokens = 0
     
+    activation_list = []
+
     for i in tqdm(range(0, tokens.shape[0], batch_size)):
         tokens_BL = tokens[i : i + batch_size]
         _, cache = model.run_with_cache(tokens_BL, stop_at_layer=layer + 1, names_filter=hook_name)
@@ -265,6 +267,8 @@ def get_feature_activation_sparsity(
         
         # Square the activations
         sae_act_squared = sae_act_BLF #** 2 # Aashiq average activations without squaring
+        activation_list.append(sae_act_squared.cpu().numpy())
+        activation_list[-1][:, 0, :] = 0.0
         
         if mask_bos_pad_eos_tokens:
             attn_mask_BL = get_bos_pad_eos_mask(tokens_BL, model.tokenizer)
@@ -276,8 +280,8 @@ def get_feature_activation_sparsity(
         
         total_tokens += attn_mask_BL.sum().item()
         running_sum_F += einops.reduce(sae_act_squared, "B L F -> F", "sum")
-    
-    return running_sum_F / total_tokens
+
+    return running_sum_F / total_tokens,activation_list
 
 
 # Fischer info

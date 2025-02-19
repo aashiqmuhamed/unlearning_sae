@@ -33,7 +33,7 @@ class UnlearningEvalConfig(BaseEvalConfig):
         description="We ignore features that activate more than this threshold on the retain dataset",
     )
     n_features_list: list[int] = Field(
-        default_factory=lambda: [10], #[10, 20, 30, 50, 100], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
+        default_factory=lambda: [20], #[10, 20, 30, 50, 100], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
         title="N Features List",
         description="Each N is the number of features we select and clamp to a negative value",
     )
@@ -125,17 +125,17 @@ class UnlearningEvalConfig_cyber(UnlearningEvalConfig):
     )
 
     retain_thresholds: list[float] = Field(
-        default_factory=lambda: [95,90,85,80],#, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
+        default_factory=lambda: [90],#,80,70,60],#, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
         title="Retain Thresholds",
         description="We ignore features that activate more than this threshold on the retain dataset",
     )
     n_features_list: list[int] = Field(
-        default_factory=lambda: [10, 20, 30, 50, 100], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
+        default_factory=lambda: [20],#[10, 20, 30, 50], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
         title="N Features List",
         description="Each N is the number of features we select and clamp to a negative value",
     )
     multipliers: list[int] = Field(
-        default_factory=lambda: [500],#[10,50,100,200, 250, 300, 350, 500],
+        default_factory=lambda: [300],#[10,50,100,200, 250, 300, 350, 500],
         title="Multipliers",
         description="A list of negative values. We iterate over this list, clamping the selected features to each value",
     )
