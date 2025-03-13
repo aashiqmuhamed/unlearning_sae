@@ -57,6 +57,177 @@ def load_dataset_with_retries(
                 raise
 
 
+def get_distrib(
+    model: HookedTransformer,
+    sae: SAE,
+    activations: torch.tensor,
+    mcq_batch_size: int,
+    artifacts_folder: str,
+    dataset_name: str = "wmdp-bio",
+    target_metric: Optional[str] = None,
+    question_subset: Optional[list[int]] = None,
+    question_subset_file: Optional[str] = None,
+    permutations: list[list[int]] = [[0, 1, 2, 3]],
+    verbose: bool = True,
+    without_question: bool = False,
+    prompt_format: Optional[str] = None,
+    split: str = "all",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+
+    Parameters:
+    ----------
+    model : HookedTransformer
+    dataset_name : str, default='wmdp-bio' - Or the dataset_name of MMLU
+    target_metric : Optional[str] - Name of the metric used to select a subset of questions
+    question_subset : Optional[List[int]] - A list of indices specifying the subset of questions to be used
+    question_subset_file : Optional[str] - Path to a file containing the indices for a subset of the questions to be used. Overrides question_subset if provided
+    permutations : List[List[int]], default=[[0, 1, 2, 3]] - List of permutations to be applied to the question indices
+    verbose : bool, default=True
+    without_question : bool, default=False - Evaluate the model without instruction and question if True
+    prompt_format : Optional[str] - The format of the prompt to be used. Can be None, 'GEMMA_INST_FORMAT' or 'MIXTRAL_INST_FORMAT'
+    split : str, default='all'
+    **kwargs : Any - Additional arguments
+
+    """
+
+    metrics = {}
+
+    # Load dataset
+    assert isinstance(dataset_name, str)
+    if dataset_name == "wmdp-bio":
+        pre_question = PRE_WMDP_BIO
+        dataset = load_dataset_with_retries("cais/wmdp", "wmdp-bio", split="test")
+    elif dataset_name == "wmdp-cyber":
+        pre_question = PRE_WMDP_CYBER
+        dataset = load_dataset_with_retries("cais/wmdp", "wmdp-cyber", split="test")
+    else:
+        pre_question = PRE_QUESTION_FORMAT.format(subject=dataset_name.replace("_", " "))
+        # pre_question = 'The following are multiple choice questions (with answers) about history'
+        dataset = load_dataset_with_retries("cais/mmlu", dataset_name, split="test")
+
+    answers = [x["answer"] for x in dataset]
+    questions = [x["question"] for x in dataset]
+    choices_list = [x["choices"] for x in dataset]
+    print('len(questions):', len(questions),' permutations number:', len(permutations))
+
+    # Select subset of questions
+    assert target_metric in [
+        None,
+        "correct",
+        "correct-iff-question",
+        "correct_no_tricks",
+        "all",
+    ], "target_metric not recognised"
+    assert split in ["all", "train", "test"], "split not recognised"
+
+    if target_metric is not None:
+        model_name = model.cfg.model_name
+        full_dataset_name = (
+            f'mmlu-{dataset_name.replace("_", "-")}' if (dataset_name != "wmdp-bio" and dataset_name != "wmdp-cyber") else dataset_name
+        )
+        question_subset_file = f"data/question_ids/{split}/{full_dataset_name}_{target_metric}.csv"
+        question_subset_file = os.path.join(artifacts_folder, question_subset_file)
+
+    if question_subset_file is not None:
+        question_subset = np.genfromtxt(question_subset_file, ndmin=1, dtype=int)
+
+    # Only keep desired subset of questions
+    if question_subset is not None:
+        answers = [answers[i] for i in question_subset if i < len(answers)]
+        questions = [questions[i] for i in question_subset if i < len(questions)]
+        choices_list = [choices_list[i] for i in question_subset if i < len(choices_list)]
+
+    # changing prompt_format
+    if model.cfg.model_name in ["gemma-2-9b-it", "gemma-2-2b-it"]:
+        prompt_format = "GEMMA_INST_FORMAT"
+    else:
+        raise Exception("Model prompt format not found.")
+
+    if permutations is None:
+        prompts = [
+            convert_wmdp_data_to_prompt(
+                question,
+                choices,
+                prompt_format=prompt_format,
+                without_question=without_question,
+                pre_question=pre_question,
+            )
+            for question, choices in zip(questions, choices_list)
+        ]
+    else:
+        prompts = [
+            [
+                convert_wmdp_data_to_prompt(
+                    question,
+                    choices,
+                    prompt_format=prompt_format,
+                    permute_choices=p,
+                    without_question=without_question,
+                    pre_question=pre_question,
+                )
+                for p in permutations
+            ]
+            for question, choices in zip(questions, choices_list)
+        ]
+        prompts = [item for sublist in prompts for item in sublist]
+
+        answers = [[p.index(answer) for p in permutations] for answer in answers]
+        answers = [item for sublist in answers for item in sublist]
+
+    actual_answers = answers
+
+    batch_size = np.minimum(len(prompts), mcq_batch_size)
+    n_batches = len(prompts) // batch_size
+
+    if len(prompts) > batch_size * n_batches:
+        n_batches = n_batches + 1
+
+    if isinstance(model, HookedTransformer):
+        output_activ=get_feature_activation(data=prompts,model=model,sae=sae,layer= sae.cfg.hook_layer,hook_name=sae.cfg.hook_name,activations=activations,batch_size=batch_size,n_batches=n_batches)
+    
+    return output_activ
+
+
+def get_feature_activation(
+    data:list,
+    model: HookedTransformer,
+    sae: SAE,
+    layer: int,
+    hook_name: str,
+    activations:torch.tensor,
+    batch_size:int,
+    n_batches:int,
+):
+    """Get the activation sparsity for each SAE feature based on squared activations.
+    Returns the average squared activation per feature across all tokens.
+    Note: If evaluating many SAEs, it is more efficient to use save_activations() and get the sparsity from the saved activations."""
+    device = 'cuda'
+    activation_list = []    
+    activations = activations.to(device)
+    #for batch in data_loader:
+        #tokens_BL =model.to_tokens(batch, padding_side="right", prepend_bos=False).to("cuda")
+
+    all_activations = []
+    with torch.no_grad():
+        output_probs = []
+
+        for i in tqdm(range(n_batches)):
+            prompt_batch = data[i * batch_size : i * batch_size + batch_size]
+            current_batch_size = len(prompt_batch)
+
+            # prepend_bos is False because the prompt already has a BOS token due to the instruct format
+            token_batch = model.to_tokens(prompt_batch, padding_side="right", prepend_bos=False).to(
+                "cuda"
+            )
+            _, cache = model.run_with_cache(token_batch, stop_at_layer=layer + 1, names_filter=hook_name)
+            resid_BLD: Float[torch.Tensor, "batch seq_len d_model"] = cache[hook_name]
+            sae_act_BLF: Float[torch.Tensor, "batch seq_len d_sae"] = sae.encode(resid_BLD)
+            all_activations.append(sae_act_BLF[:,:,activations].cpu().numpy())
+    print('LEN',len(all_activations))
+    return all_activations
+
 def calculate_MCQ_metrics(
     model: HookedTransformer,
     mcq_batch_size: int,
@@ -579,7 +750,23 @@ def modify_and_calculate_metrics(
 
         metrics_for_current_ablation["loss_added"] = loss_added
         dataset_names = [x for x in dataset_names if x != "loss_added"]
-
+    ############################################
+    #JB distrib modification
+    # for dataset_name in dataset_names:
+    #     print(dataset_name)
+    #     if dataset_name in metric_params:
+    #         metric_param = metric_params[dataset_name]
+    #     else:
+    #         metric_param = {"target_metric": "correct", "verbose": verbose}
+    #     list_to_save = get_distrib(model,sae,torch.tensor(ablate_params['features_to_ablate']), mcq_batch_size, artifacts_folder, dataset_name=dataset_name,split=split,**metric_param,)
+    #     #save list to file
+    #     var=0
+    #     save_file_name = f"{dataset_name}_distrib_v{var}.pkl"
+    #     full_path = os.path.join('/home/jb/Documents/unlearning_sae/', save_file_name)
+    #     with open(full_path, "wb") as f:
+    #         pickle.dump(list_to_save, f)
+    #     print('saved:',full_path)
+    ############################################
     model.reset_hooks()
     modify_model(model, sae, **ablate_params)
 
@@ -607,6 +794,10 @@ def modify_and_calculate_metrics(
 
 
 def generate_ablate_params_list(main_ablate_params, sweep):
+
+    activation_threshold = sweep['activation_threshold']
+    sweep.pop('activation_threshold')
+
     combinations = [
         dict(zip(sweep.keys(), values)) for values in itertools.product(*sweep.values())
     ]
@@ -615,6 +806,9 @@ def generate_ablate_params_list(main_ablate_params, sweep):
     for combo in combinations:
         specific_inputs = main_ablate_params.copy()
         specific_inputs.update(combo)
+        num_feat = specific_inputs['features_to_ablate'].shape[0]
+        specific_inputs["activation_threshold"] = activation_threshold[str(num_feat)]
+
         cfg_list.append(specific_inputs)
     return cfg_list
 
@@ -678,10 +872,12 @@ def calculate_metrics_list(
         # check if metrics already exist
         intervention_method = ablate_params["intervention_method"]
         multiplier = ablate_params["multiplier"]
+        activation_threshold = ablate_params["activation_threshold"]
         n_features = len(ablate_params["features_to_ablate"])
         layer = sae.cfg.hook_layer
 
         save_file_name = f"{intervention_method}_multiplier{multiplier}_nfeatures{n_features}_layer{layer}_retainthres{retain_threshold}_seed{seed}.pkl"
+        #_act_th_{activation_threshold}
         full_path = os.path.join(save_metrics_dir, save_file_name)
 
         if os.path.exists(full_path) and not force_rerun:
@@ -689,7 +885,7 @@ def calculate_metrics_list(
                 ablated_metrics = pickle.load(f)
             metrics_list.append(ablated_metrics)
             continue
-
+        print(ablate_params)
         ablated_metrics = modify_and_calculate_metrics(
             model,
             mcq_batch_size,

@@ -57,7 +57,7 @@ def get_forget_retain_data(
         if forget_corpora != "bio-forget-corpus":
             concat_el = load_dataset("cais/wmdp", "wmdp-chem",split='test')
             list_of_str = collate_fn(concat_el)
-            #retain_dataset = retain_dataset + list_of_str
+            #retain_dataset = retain_dataset + list_of_str[:50]
 
     else:
         raise Exception("Unknown retain corpora")
@@ -153,7 +153,10 @@ def get_top_features_percentile(
     retain_activations: np.ndarray,
     forget_percentile: float = 5,  # Select features in top 5% of forget importance
     retain_percentile: float = 100,  # Filter out features in top 50% of retain importance
-    ratio_percentile: float = 90    # Select features with forget/retain ratio in top 10%
+    ratio_percentile: float = 90,    # Select features with forget/retain ratio in top 10%
+    n_features_lst:list = [10,20,30],
+    folder_name=None,
+
 ) -> np.ndarray:
     """
     Selects features using percentile-based criteria instead of fixed thresholds.
@@ -189,39 +192,50 @@ def get_top_features_percentile(
         (importance_ratio >= ratio_threshold)       # High forget/retain ratio
     )[0]
     sel_ind_out = selected_features[np.argsort(-forget_score[selected_features])]
-    sel_ind = sel_ind_out[:20]
+    
     # plot_colored_points(retain_score,forget_score, sel_ind)
     # import pdb; pdb.set_trace()
     # Sort by forget importance
-    #load activations
+    # load activations
     import pickle
-    with open('act_fgt.pkl', 'rb') as f:
+    with open(folder_name+'/act_fgt.pkl', 'rb') as f:
         act_fgt = pickle.load(f)
-    with open('act_ret.pkl', 'rb') as f:
+    with open(folder_name+'/act_ret.pkl', 'rb') as f:
         act_ret = pickle.load(f)
+    percentile_95 = {}    
 
-    distrib = []
-    for el in act_fgt:
-        buff  = el[:,:,sel_ind]
-        buff = buff>0
-        buff2 = (buff.sum(axis=2)>0)
-        #print(buff.shape,buff2.sum()/buff2.shape[1])
-        distrib.append(buff.sum(axis=(1, 2)) / (buff.shape[1] * buff.shape[2]))
-    distrib = np.asarray(distrib)
-    print('percentili 1 e 5 fgt: ',np.percentile(distrib,1),np.percentile(distrib,5))    
-    
-    distrib = []
+    for n in n_features_lst:
+        sel_ind = sel_ind_out[:n]
+        # distrib = []
+        # for el in act_fgt:
+        #     buff  = el[:,:,sel_ind]
+        #     buff = buff>0
+        #     buff2 = (buff.sum(axis=2)>0)
+        #     #print(buff.shape,buff2.sum()/buff2.shape[1])
+        #     distrib.append(buff.sum(axis=(1, 2)) / (buff.shape[1] * buff.shape[2]))
+        # distrib = np.asarray(distrib)
+        # print('percentili 1 e 5 fgt: ',np.percentile(distrib,1),np.percentile(distrib,5))    
+        
+        distrib = []
 
-    for el in act_ret:
-        buff  = el[:,:,sel_ind]
-        buff = buff>0
-        buff2 = (buff.sum(axis=2)>0)
-        #print(buff2.sum()/buff2.shape[1])
-        distrib.append(buff2.sum()/buff2.shape[1])#buff.sum(axis=(1, 2)) / (buff.shape[1] * buff.shape[2]))
-    distrib = np.asarray(distrib)
-    print('percentili 95 e 99 ret: ',np.percentile(distrib,95),np.percentile(distrib,99))
-    
-    return sel_ind_out
+        for el in act_ret:
+            buff  = el[:,:,sel_ind]
+            buff = buff>0
+            buff2 = (buff.sum(axis=2)>0)
+            #print(buff2.sum()/buff2.shape[1])
+            distrib.append(buff2.sum()/buff2.shape[1])
+            #distrib.append(buff.sum(axis=(1, 2)) / (buff.shape[1] * buff.shape[2]))
+        distrib = np.asarray(distrib)
+        # bootstrap_percentiles = []
+        # for _ in range(1000):
+        #     resample = np.random.choice(distrib, size=len(distrib), replace=True)
+        #     bootstrap_percentiles.append(np.percentile(resample, 95))
+        # print('ESTIMATION: ',np.mean(bootstrap_percentiles))
+        print('NUM:',n,' percentili 95 e 99 ret: ',np.percentile(distrib,95),np.percentile(distrib,99))
+        alpha = np.percentile(distrib,95)#np.mean(bootstrap_percentiles)#
+
+        percentile_95[str(n)] = alpha
+    return sel_ind_out,percentile_95
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -318,7 +332,7 @@ def check_existing_results(artifacts_folder: str, sae_name) -> bool:
 
 
 def calculate_sparsity(
-    model: HookedTransformer, sae: SAE, forget_tokens, retain_tokens, batch_size: int):
+    model: HookedTransformer, sae: SAE, forget_tokens, retain_tokens, batch_size: int,folder_name=None):
 
     feature_sparsity_forget,act_fgt = get_feature_activation_sparsity(
             forget_tokens,
@@ -341,9 +355,9 @@ def calculate_sparsity(
     #save the activations which are lists of numpy vectors use pickle
     #import pdb; pdb.set_trace()
     import pickle
-    with open('act_fgt.pkl', 'wb') as f:
+    with open(folder_name+'/act_fgt.pkl', 'wb') as f:
         pickle.dump(act_fgt, f)
-    with open('act_ret.pkl', 'wb') as f:
+    with open(folder_name+'/act_ret.pkl', 'wb') as f:
         pickle.dump(act_ret, f)
     
     return feature_sparsity_forget.cpu().numpy(), feature_sparsity_retain.cpu().numpy()
@@ -413,7 +427,7 @@ def save_feature_sparsity(
     fgt_set: str,
     retain_set: str
 ):
-    #if check_existing_results(artifacts_folder, sae_name):
+    # if check_existing_results(artifacts_folder, sae_name):
     #    print(f"Sparsity calculation for {sae_name} is already done")
     #    return
     forget_tokens, retain_tokens = get_shuffled_forget_retain_tokens(
@@ -424,8 +438,11 @@ def save_feature_sparsity(
                                                                     forget_corpora=fgt_set,
                                                                     retain_corpora=retain_set)
 
+    folder_name = os.path.join(artifacts_folder, sae_name, SPARSITIES_DIR)
+    os.makedirs(folder_name, exist_ok=True)
+
     feature_sparsity_forget, feature_sparsity_retain = calculate_sparsity(
-        model, sae, forget_tokens, retain_tokens, batch_size
+        model, sae, forget_tokens, retain_tokens, batch_size,folder_name=folder_name
     )
 
     save_results(artifacts_folder, sae_name, feature_sparsity_forget, feature_sparsity_retain)
