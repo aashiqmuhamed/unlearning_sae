@@ -771,6 +771,7 @@ def modify_and_calculate_metrics(
     modify_model(model, sae, **ablate_params)
 
     for dataset_name in dataset_names:
+        a1 = time.time()
         print(dataset_name)
         if dataset_name in metric_params:
             metric_param = metric_params[dataset_name]
@@ -785,6 +786,7 @@ def modify_and_calculate_metrics(
             split=split,
             **metric_param,
         )
+        print('Elapsed: ', time.time()-a1)
         print(dataset_metrics['mean_correct'])
         metrics_for_current_ablation[dataset_name] = dataset_metrics
 
@@ -876,8 +878,7 @@ def calculate_metrics_list(
         n_features = len(ablate_params["features_to_ablate"])
         layer = sae.cfg.hook_layer
 
-        save_file_name = f"{intervention_method}_multiplier{multiplier}_nfeatures{n_features}_layer{layer}_retainthres{retain_threshold}_seed{seed}.pkl"
-        #_act_th_{activation_threshold}
+        save_file_name = f"{intervention_method}_multiplier{multiplier}_nfeatures{n_features}_layer{layer}_retainthres{retain_threshold}_seed{seed}.pkl"#_act_th_{activation_threshold}.pkl"#
         full_path = os.path.join(save_metrics_dir, save_file_name)
 
         if os.path.exists(full_path) and not force_rerun:

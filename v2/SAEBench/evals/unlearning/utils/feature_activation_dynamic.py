@@ -57,8 +57,18 @@ def get_forget_retain_data(
         if forget_corpora != "bio-forget-corpus":
             concat_el = load_dataset("cais/wmdp", "wmdp-chem",split='test')
             list_of_str = collate_fn(concat_el)
-            #retain_dataset = retain_dataset + list_of_str[:50]
+            #retain_dataset = retain_dataset + list_of_str#[:50]
 
+    elif retain_corpora == 'books':
+        raw_retain = load_dataset("muse-bench/MUSE-Books", "raw",split='retain1')
+        for x in raw_retain:
+            if len(x["text"]) > min_len:
+                retain_dataset.append(str(x["text"]))
+    elif retain_corpora == 'news':
+        raw_retain = load_dataset("muse-bench/MUSE-News", "raw",split='retain1')
+        for x in raw_retain:
+            if len(x["text"]) > min_len:
+                retain_dataset.append(str(x["text"]))
     else:
         raise Exception("Unknown retain corpora")
 
@@ -81,6 +91,18 @@ def get_forget_retain_data(
         forget_dataset = forget_dataset.filter(lambda x: len(x["text"])>min_len)
         forget_dataset.shuffle(seed=42)
         forget_dataset = forget_dataset["text"]
+    elif forget_corpora == 'books':
+        forget_dataset = load_dataset("muse-bench/MUSE-Books", "raw",split='forget')
+        forget_dataset = forget_dataset.filter(lambda x: len(x["text"])>min_len)
+        forget_dataset.shuffle(seed=42)
+        forget_dataset = forget_dataset["text"]
+    elif forget_corpora == 'news':
+        forget_dataset = load_dataset("muse-bench/MUSE-News", "raw",split='forget')
+        #forget_dataset = load_dataset("muse-bench/MUSE-News", "scal",split='forget_4')
+        #forget_dataset = load_dataset("muse-bench/MUSE-News", "sust",split='forget_3')
+        forget_dataset = forget_dataset.filter(lambda x: len(x["text"])>min_len)
+        forget_dataset.shuffle(seed=42)
+        forget_dataset = forget_dataset["text"]
     return forget_dataset, retain_dataset
 
 
@@ -97,7 +119,6 @@ def get_shuffled_forget_retain_tokens(
     note: wikitext has less than 2048 batches with seq_len=1024
     """
     forget_dataset, retain_dataset = get_forget_retain_data(forget_corpora, retain_corpora)
-
     print(len(forget_dataset), len(forget_dataset[0]))
     print(len(retain_dataset), len(retain_dataset[0]))
 
@@ -115,7 +136,7 @@ def get_shuffled_forget_retain_tokens(
     shuffled_retain_tokens = retain_tokens[torch.randperm(retain_tokens.shape[0])]
     batch_size_cmn = min(int(batch_size*dataset_fraction/100),min(int(shuffled_forget_tokens.shape[0]*dataset_fraction/100),int(shuffled_retain_tokens.shape[0]*dataset_fraction/100)))
     
-    print('tokens size: ',batch_size_cmn)
+    print('tokens size: ',batch_size_cmn)#[:batch_size_cmn*2]
     return shuffled_forget_tokens[:batch_size_cmn], shuffled_retain_tokens[:batch_size_cmn]
 
 
@@ -181,10 +202,14 @@ def get_top_features_percentile(
     importance_ratio = forget_score / (retain_score + 1e-21)
     
     # Calculate percentile thresholds
+    
     forget_threshold = np.percentile(forget_score, forget_percentile)
     retain_threshold = np.percentile(retain_score, retain_percentile)
     ratio_threshold = np.percentile(importance_ratio, ratio_percentile)
-    
+    # import pickle
+    # with open('/home/jb/Documents/unlearning_sae/test_filtro.pkl', 'wb') as f:
+    #     pickle.dump([forget_score,retain_score,importance_ratio],f)
+    # print(SAVED)
     # Select features that meet all criteria:
     selected_features = np.where(
         (forget_score >= forget_threshold) &        # High forget importance
@@ -192,7 +217,7 @@ def get_top_features_percentile(
         (importance_ratio >= ratio_threshold)       # High forget/retain ratio
     )[0]
     sel_ind_out = selected_features[np.argsort(-forget_score[selected_features])]
-    
+    forget_score_align = np.sort(-forget_score[selected_features])
     # plot_colored_points(retain_score,forget_score, sel_ind)
     # import pdb; pdb.set_trace()
     # Sort by forget importance
@@ -206,6 +231,7 @@ def get_top_features_percentile(
 
     for n in n_features_lst:
         sel_ind = sel_ind_out[:n]
+        print(forget_score_align[:n])
         # distrib = []
         # for el in act_fgt:
         #     buff  = el[:,:,sel_ind]
@@ -226,13 +252,14 @@ def get_top_features_percentile(
             distrib.append(buff2.sum()/buff2.shape[1])
             #distrib.append(buff.sum(axis=(1, 2)) / (buff.shape[1] * buff.shape[2]))
         distrib = np.asarray(distrib)
-        # bootstrap_percentiles = []
-        # for _ in range(1000):
-        #     resample = np.random.choice(distrib, size=len(distrib), replace=True)
-        #     bootstrap_percentiles.append(np.percentile(resample, 95))
-        # print('ESTIMATION: ',np.mean(bootstrap_percentiles))
-        print('NUM:',n,' percentili 95 e 99 ret: ',np.percentile(distrib,95),np.percentile(distrib,99))
-        alpha = np.percentile(distrib,95)#np.mean(bootstrap_percentiles)#
+        bootstrap_percentiles = []
+        perc_val = 95
+        for _ in range(1000):
+            resample = np.random.choice(distrib, size=len(distrib), replace=True)
+            bootstrap_percentiles.append(np.percentile(resample, perc_val))
+        print('ESTIMATION: ',np.mean(bootstrap_percentiles))
+        print('NUM:',n,' percentili 95 e 99 ret: ',np.percentile(distrib,perc_val),np.percentile(distrib,99))
+        alpha = np.percentile(distrib,perc_val)
 
         percentile_95[str(n)] = alpha
     return sel_ind_out,percentile_95
@@ -427,9 +454,9 @@ def save_feature_sparsity(
     fgt_set: str,
     retain_set: str
 ):
-    # if check_existing_results(artifacts_folder, sae_name):
-    #    print(f"Sparsity calculation for {sae_name} is already done")
-    #    return
+    if check_existing_results(artifacts_folder, sae_name):
+       print(f"Sparsity calculation for {sae_name} is already done")
+       return
     forget_tokens, retain_tokens = get_shuffled_forget_retain_tokens(
                                                                     model, 
                                                                     batch_size=dataset_size,

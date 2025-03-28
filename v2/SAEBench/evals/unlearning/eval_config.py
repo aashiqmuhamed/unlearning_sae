@@ -28,17 +28,17 @@ class UnlearningEvalConfig(BaseEvalConfig):
     )
 
     retain_thresholds: list[float] = Field(
-        default_factory=lambda: [95,90,85,80,75,70,65,60,55,50], #[0.01, 0.001, 0.002, 0.005], #[95, 99], #[0.01, 0.001, 0.002, 0.005], #[95, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
+        default_factory=lambda: [95], #[0.01, 0.001, 0.002, 0.005], #[95, 99], #[0.01, 0.001, 0.002, 0.005], #[95, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
         title="Retain Thresholds",
         description="We ignore features that activate more than this threshold on the retain dataset",
     )
     n_features_list: list[int] = Field(
-        default_factory=lambda: [20], #[10, 20, 30, 50, 100], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
+        default_factory=lambda: [30], #[10, 20, 30, 50, 100], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
         title="N Features List",
         description="Each N is the number of features we select and clamp to a negative value",
     )
     multipliers: list[int] = Field(
-        default_factory=lambda: [10,25,50,100,200, 250, 300, 350, 500], #[10,50,100,200, 250, 300, 350, 500],
+        default_factory=lambda: [500], #[10,50,100,200, 250, 300, 350, 500],
         title="Multipliers",
         description="A list of negative values. We iterate over this list, clamping the selected features to each value",
     )
@@ -125,17 +125,17 @@ class UnlearningEvalConfig_cyber(UnlearningEvalConfig):
     )
 
     retain_thresholds: list[float] = Field(
-        default_factory=lambda: [95,90],#,80,70,60],#, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
+        default_factory=lambda: [90],#,80,70,60],#, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
         title="Retain Thresholds",
         description="We ignore features that activate more than this threshold on the retain dataset",
     )
     n_features_list: list[int] = Field(
-        default_factory=lambda: [50], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
+        default_factory=lambda: [30], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
         title="N Features List",
         description="Each N is the number of features we select and clamp to a negative value",
     )
     multipliers: list[int] = Field(
-        default_factory=lambda: [100,200, 250, 300, 400, 500],#[10,50,100,200, 250, 300, 350, 500],
+        default_factory=lambda: [500],#[10,50,100,200, 250, 300, 350, 500],
         title="Multipliers",
         description="A list of negative values. We iterate over this list, clamping the selected features to each value",
     )
@@ -151,4 +151,84 @@ class UnlearningEvalConfig_cyber(UnlearningEvalConfig):
         default=100,
         title="Dataset Size",
         description="Dataset size we use when calculating feature sparsity",
+    )
+
+
+@dataclass
+class UnlearningEvalConfig_books(UnlearningEvalConfig):
+    
+    retain_set: str = Field(default = 'books')
+    fgt_set: str = Field(default = 'books')
+
+    dataset_names: list[str] = Field(
+        default_factory=lambda: [
+            "wmdp-cyber",
+            "high_school_us_history",
+            "college_biology",
+            "high_school_geography",
+            "human_aging",
+        ],
+        title="Dataset Names",
+        description="List of dataset names. We want to unlearn wmdp-bio while retaining knowledge in other datasets",
+    )
+
+    intervention_method: str = Field(
+        default="clamp_feature_activation",
+        title="Intervention Method",
+        description="Intervention method. We only support 'clamp_feature_activation' for now",
+    )
+
+    retain_thresholds: list[float] = Field(
+        default_factory=lambda: [95,90],#,80,70,60],#, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
+        title="Retain Thresholds",
+        description="We ignore features that activate more than this threshold on the retain dataset",
+    )
+    n_features_list: list[int] = Field(
+        default_factory=lambda: [10,20,30], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
+        title="N Features List",
+        description="Each N is the number of features we select and clamp to a negative value",
+    )
+    multipliers: list[int] = Field(
+        default_factory=lambda: [500],#[10,50,100,200, 250, 300, 350, 500],
+        title="Multipliers",
+        description="A list of negative values. We iterate over this list, clamping the selected features to each value",
+    )
+@dataclass
+class UnlearningEvalConfig_news(UnlearningEvalConfig):
+    
+    retain_set: str = Field(default = 'news')
+    fgt_set: str = Field(default = 'news')
+
+    dataset_names: list[str] = Field(
+        default_factory=lambda: [
+            "wmdp-cyber",
+            "high_school_us_history",
+            "college_biology",
+            "high_school_geography",
+            "human_aging",
+        ],
+        title="Dataset Names",
+        description="List of dataset names. We want to unlearn wmdp-bio while retaining knowledge in other datasets",
+    )
+
+    intervention_method: str = Field(
+        default="clamp_feature_activation",
+        title="Intervention Method",
+        description="Intervention method. We only support 'clamp_feature_activation' for now",
+    )
+
+    retain_thresholds: list[float] = Field(
+        default_factory=lambda: [90],#,80,70,60],#, 90, 85, 80, 70, 60, 50], #[0.01, 0.001, 0.1, 1], #[0.001, 0.01],
+        title="Retain Thresholds",
+        description="We ignore features that activate more than this threshold on the retain dataset",
+    )
+    n_features_list: list[int] = Field(
+        default_factory=lambda: [10,20,30], #[20, 50, 100, 200, 500, 1000, 10000], # Not used
+        title="N Features List",
+        description="Each N is the number of features we select and clamp to a negative value",
+    )
+    multipliers: list[int] = Field(
+        default_factory=lambda: [500],#[10,50,100,200, 250, 300, 350, 500],
+        title="Multipliers",
+        description="A list of negative values. We iterate over this list, clamping the selected features to each value",
     )

@@ -60,6 +60,7 @@ def get_shuffled_forget_retain_tokens(
     retain_corpora: str = "wikitext",
     batch_size: int = 2048,
     seq_len: int = 1024,
+    dataset_fraction: int = 100
 ):
     """
     get shuffled forget tokens and retain tokens, with given batch size and sequence length
@@ -82,8 +83,11 @@ def get_shuffled_forget_retain_tokens(
     print(forget_tokens.shape, retain_tokens.shape)
     shuffled_forget_tokens = forget_tokens[torch.randperm(forget_tokens.shape[0])]
     shuffled_retain_tokens = retain_tokens[torch.randperm(retain_tokens.shape[0])]
+    batch_size_cmn = min(int(batch_size*dataset_fraction/100),min(int(shuffled_forget_tokens.shape[0]*dataset_fraction/100),int(shuffled_retain_tokens.shape[0]*dataset_fraction/100)))
+    
+    print('tokens size: ',batch_size_cmn)
+    return shuffled_forget_tokens[:batch_size_cmn], shuffled_retain_tokens[:batch_size_cmn]
 
-    return shuffled_forget_tokens[:batch_size], shuffled_retain_tokens[:batch_size]
 
 
 def gather_residual_activations(model: HookedTransformer, target_layer: int, inputs):

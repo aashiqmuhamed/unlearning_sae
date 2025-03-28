@@ -25,9 +25,9 @@ from evals.unlearning.eval_output import (
     UnlearningMetricCategories,
     UnlearningMetrics,
 )
-from evals.unlearning.utils.eval import run_eval_single_sae
+from evals.unlearning.utils.eval_dynamic import run_eval_single_sae
 import sae_bench_utils.activation_collection as activation_collection
-from evals.unlearning.eval_config import UnlearningEvalConfig
+from evals.unlearning.eval_config import UnlearningEvalConfig,UnlearningEvalConfig_cyber,UnlearningEvalConfig_books,UnlearningEvalConfig_news
 from sae_bench_utils import (
     get_eval_uuid,
     get_sae_lens_version,
@@ -43,7 +43,7 @@ EVAL_TYPE = "unlearning"
 
 
 def get_params(string):
-    pattern = r"multiplier(\d+)_nfeatures(\d+)_layer(\d+)_retainthres(\d+(?:\.\d+)?).pkl"
+    pattern = r"multiplier(\d+)_nfeatures(\d+)_layer(\d+)_retainthres(\d+(?:\.\d+)?)_seed(\d+(?:\.\d+)?).pkl"
     match = re.search(pattern, string)
     if match:
         return match.groups()  # multiplier, nfeatures, layer, retainthres
@@ -61,7 +61,7 @@ def get_metrics_df(metrics_dir):
 
         file_name = os.path.basename(file_path)
         sae_folder = os.path.dirname(file_path)
-        multiplier, n_features, layer, retain_thres = get_params(file_name)
+        multiplier, n_features, layer, retain_thres,seed = get_params(file_name)
 
         row = {}
         n_se_questions = 0
@@ -136,48 +136,76 @@ def run_eval(
 
     os.makedirs(output_path, exist_ok=True)
 
-    artifacts_folder = os.path.join("artifacts", EVAL_TYPE, config.model_name)
+    # artifacts_folder = os.path.join("artifacts_dynamic_percentile", EVAL_TYPE, config.model_name)
+    artifacts_folder = os.path.join(args.exp_name+'_'+args.case, EVAL_TYPE, config.model_name)
 
     results_dict = {}
 
     llm_dtype = general_utils.str_to_dtype(config.llm_dtype)
-    config.random_seed = 0
+
     random.seed(config.random_seed)
     torch.manual_seed(config.random_seed)
 
+    #################################
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    if config.retain_set == 'books':
+        model_dir = 'aashiqmuhamed/gemma-2b-muse-books-target'
+    else:
+        model_dir = 'aashiqmuhamed/gemma-2b-muse-news-target'
+    hf_model = AutoModelForCausalLM.from_pretrained(model_dir)
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    #################################
     model = HookedTransformer.from_pretrained_no_processing(
-        config.model_name, device=device, dtype=config.llm_dtype#, cache_dir="/data/datasets/wmdp_test/model_dir"
+        config.model_name,hf_model=hf_model,tokenizer=tok, device=device, dtype=config.llm_dtype
     )
 
     for sae_release, sae_object_or_id in tqdm(
         selected_saes, desc="Running SAE evaluation on all selected SAEs"
     ):
+
         sae_id, sae, sparsity = general_utils.load_and_format_sae(
             sae_release, sae_object_or_id, device
         )
         sae = sae.to(device=device, dtype=llm_dtype)
 
         sae_result_path = general_utils.get_results_filepath(output_path, sae_release, sae_id)
-
-        if os.path.exists(sae_result_path) and not force_rerun:
-            print(f"Skipping {sae_release}_{sae_id} as results already exist")
-            continue
+        # if os.path.exists(sae_result_path) and not force_rerun:
+        #     print(f"Skipping {sae_release}_{sae_id} as results already exist")
+        #     continue
 
         sae_release_and_id = f"{sae_release}_{sae_id}"
 
         sae_results_folder = os.path.join(artifacts_folder, sae_release_and_id, "results/metrics")
 
         run_eval_single_sae(model, sae, config, artifacts_folder, sae_release_and_id, force_rerun)
+ 
 
+    return [] #@results_dict
 
 
 def create_config_and_selected_saes(
     args,
 ) -> tuple[UnlearningEvalConfig, list[tuple[str, str]]]:
-    config = UnlearningEvalConfig(
-        model_name=args.model_name,
-    )
+    if args.case == "bio":
+        config = UnlearningEvalConfig(
+            model_name=args.model_name,
+        )
+    elif args.case == "cyber":
+        config = UnlearningEvalConfig_cyber(
+            model_name=args.model_name,
+        )
+    elif args.case == "books" :
+        config = UnlearningEvalConfig_books(
+            model_name=args.model_name,
+        )
+    elif  args.case ==  'news':
+        config = UnlearningEvalConfig_news(
+            model_name=args.model_name,
+        )
 
+    else:
+        raise ValueError("Invalid case")
+    
     if args.llm_batch_size is not None:
         config.llm_batch_size = args.llm_batch_size
     else:
@@ -206,6 +234,8 @@ def arg_parser():
     parser = argparse.ArgumentParser(description="Run unlearning evaluation")
     parser.add_argument("--random_seed", type=int, default=None, help="Random seed")
     parser.add_argument("--model_name", type=str, required=True, help="Model name")
+    parser.add_argument("--exp_name", type=str, default="artifacts_dynamic_bs1")
+    parser.add_argument("--case", type=str, default="bio")
     parser.add_argument(
         "--sae_regex_pattern",
         type=str,
@@ -221,7 +251,8 @@ def arg_parser():
     parser.add_argument(
         "--output_folder",
         type=str,
-        default="eval_results/unlearning",
+        # default="eval_results/unlearning_dynamic_percentile",
+        default="eval_results/unlearning_dynamic_bs1",
         help="Output folder",
     )
     parser.add_argument("--force_rerun", action="store_true", help="Force rerun of experiments")
@@ -256,7 +287,7 @@ if __name__ == "__main__":
     --model_name gemma-2-2b-it
 
     Example Gemma-2-2B Gemma-Scope usage:
-    python evals/unlearning/main.py \
+    python evals/unlearning/main_dynamic.py \
     --sae_regex_pattern "gemma-scope-2b-pt-res" \
     --sae_block_pattern "layer_3/width_16k/average_l0_142" \
     --model_name gemma-2-2b-it
@@ -268,6 +299,8 @@ if __name__ == "__main__":
     start_time = time.time()
 
     config, selected_saes = create_config_and_selected_saes(args)
+    config.random_seed = args.random_seed
+    # import pdb; pdb.set_trace()
 
     print(selected_saes)
 
@@ -275,7 +308,8 @@ if __name__ == "__main__":
     os.makedirs(args.output_folder, exist_ok=True)
 
     # run the evaluation on all selected SAEs
-    run_eval(
+    print(config)
+    results_dict = run_eval(
         config,
         selected_saes,
         device,
@@ -287,7 +321,6 @@ if __name__ == "__main__":
     end_time = time.time()
 
     print(f"Finished evaluation in {end_time - start_time} seconds")
-
 # Use this code snippet to use custom SAE objects
 # if __name__ == "__main__":
 #     import custom_saes.identity_sae as identity_sae

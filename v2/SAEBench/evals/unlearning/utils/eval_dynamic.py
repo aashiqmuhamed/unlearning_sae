@@ -125,6 +125,44 @@ def run_metrics_calculation(
 
     return metrics_lst
 
+def compute_params_SAE(
+    model: HookedTransformer,
+    sae: SAE,
+    activation_store,
+    forget_sparsity: np.ndarray,
+    retain_sparsity: np.ndarray,
+    artifacts_folder: str,
+    sae_name: str,
+    config: UnlearningEvalConfig,
+    force_rerun: bool,
+):
+    dataset_names = config.dataset_names
+
+    ####################################################################
+    folder_name = os.path.join(artifacts_folder, sae_name, "results","sparsities")
+    for retain_threshold in config.retain_thresholds:
+
+        top_features_custom,threshold_inf = get_top_features_percentile(
+            forget_sparsity, retain_sparsity, ratio_percentile=retain_threshold,folder_name=folder_name,n_features_lst=config.n_features_list
+        )
+        
+        main_ablate_params = {
+            "intervention_method": config.intervention_method,
+            
+        }
+
+        n_features_lst = config.n_features_list
+        multipliers = config.multipliers
+
+        sweep = {
+            'threshold':retain_threshold,
+            "features_to_ablate": [np.array(top_features_custom[:n]) for n in n_features_lst],
+            "multiplier": multipliers,
+            'activation_threshold': threshold_inf,
+        }
+        print(sweep)
+
+
 
 def run_eval_single_sae(
     model: HookedTransformer,
@@ -158,16 +196,29 @@ def run_eval_single_sae(
     # do intervention and calculate eval metrics
     # activation_store = setup_activation_store(sae, model)
     activation_store = None
-    results = run_metrics_calculation(
-        model,
-        sae,
-        activation_store,
-        forget_sparsity,
-        retain_sparsity,
-        artifacts_folder,
-        sae_release_and_id,
-        config,
-        force_rerun,
-    )
+    if config.fgt_set=='books' or config.fgt_set=='news':
+        compute_params_SAE(  
+            model,
+            sae,
+            activation_store,
+            forget_sparsity,
+            retain_sparsity,
+            artifacts_folder,
+            sae_release_and_id,
+            config,
+            force_rerun,
+        )
+    else:
+        results = run_metrics_calculation(
+            model,
+            sae,
+            activation_store,
+            forget_sparsity,
+            retain_sparsity,
+            artifacts_folder,
+            sae_release_and_id,
+            config,
+            force_rerun,
+        )
 
-    return results
+        return results

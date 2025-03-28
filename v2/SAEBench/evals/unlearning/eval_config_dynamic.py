@@ -53,7 +53,7 @@ class UnlearningEvalConfig(BaseEvalConfig):
     )
 
     n_batch_loss_added: int = Field(
-        default=50,
+        default=100,
         title="N Batch Loss Added",
         description="Number of batches to use when calculating the loss added by an intervention (currently not supported).",
     )
